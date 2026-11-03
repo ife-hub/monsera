@@ -4,6 +4,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from './prisma/prisma.module';
 import { TransactionsModule } from './transactions/transactions.module';
 import { RecoveryProcessor } from './queues/recovery.processor';
+import { HealthController } from './health/health.controller';
 
 @Module({
   imports: [
@@ -18,5 +19,6 @@ import { RecoveryProcessor } from './queues/recovery.processor';
     TransactionsModule,
   ],
   providers: [RecoveryProcessor],
+  controllers: [HealthController],
 })
 export class AppModule {}

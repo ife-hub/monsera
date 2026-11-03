@@ -14,6 +14,7 @@ import { FloatLedgerModule } from './float-ledger/float-ledger.module';
 import { LoanThresholdsModule } from './loan-thresholds/loan-thresholds.module';
 import { RolesModule } from './roles/roles.module';
 import { SystemAdminsModule } from './system-admins/system-admins.module';
+import { HealthController } from './health/health.controller';
 
 @Module({
   imports: [
@@ -31,7 +32,8 @@ import { SystemAdminsModule } from './system-admins/system-admins.module';
     FloatLedgerModule,
     LoanThresholdsModule,
     RolesModule,
-    SystemAdminsModule
+    SystemAdminsModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule {}

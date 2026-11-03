@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from './prisma/prisma.module';
 import { VendModule } from './vend/vend.module';
+import { HealthController } from './health/health.controller';
 
 @Module({
   imports: [
@@ -13,5 +14,6 @@ import { VendModule } from './vend/vend.module';
     PrismaModule,
     VendModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule {}
