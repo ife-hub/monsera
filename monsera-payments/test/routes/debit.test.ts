@@ -86,10 +86,21 @@ function makeTxMock(overrides: Record<string, any> = {}, { walletBalanceNaira = 
   const customer = { id: 100, meterToken: 'MT-001', outstanding: 0, band: 'B', status: 'active' };
 
   const balances: Record<number, number> = { 1: walletA.balance };
-  mockPrisma.$queryRaw = jest.fn(async (strings: TemplateStringsArray) => (isWalletATotalSql(strings) ? walletATotalRows(balances) : []));
+  // Read outside the transaction: Wallet A's total, and the disco's current
+  // totals (its row, 500000 naira, plus the change this advance recorded).
+  mockPrisma.$queryRaw = jest.fn(async (strings: TemplateStringsArray) => {
+    if (isWalletATotalSql(strings)) return walletATotalRows(balances);
+    if (strings.join('?').includes('"PartnerBalanceChange"')) {
+      const recorded = tx.partnerBalanceChange.createMany.mock.calls.flatMap((c: any) => c[0].data).filter((r: any) => r.partnerType === 'disco');
+      const delta = recorded.reduce((sum: number, r: any) => sum + r.balanceDeltaKobo, 0);
+      return [{ balance: 50_000_000 + delta, outstanding: 0 }];
+    }
+    return [];
+  });
   const tx: any = {
     $executeRaw: jest.fn().mockResolvedValue(undefined),
     $executeRawUnsafe: jest.fn().mockResolvedValue(undefined), // savepoints around Wallet A attempts
+    partnerBalanceChange: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
     // Row locks: lockWallet reads the locked Wallet A balance; the debit
     // handler then locks the customer row by meterToken.
     $queryRaw: jest.fn().mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -415,6 +426,32 @@ describe('debit route — wallet balance guard', () => {
 });
 
 describe('debit route — happy path', () => {
+  it('records the disco and aggregator total changes instead of updating their rows, and returns the disco\'s current balance', async () => {
+    let capturedTx: any;
+    mockPrisma.$transaction.mockImplementation(async (cb: any) => {
+      capturedTx = makeTxMock();
+      return cb(capturedTx);
+    });
+
+    const res = await debitPost(makeRequest({
+      body: { meterToken: 'MT-001', amount: 5000, disco: 'IKEDC' },
+      headers: { 'API-Key': 'valid-key', 'Idempotency-Key': 'idem-partner-totals' },
+    }));
+
+    expect(res.status).toBe(201);
+    const changes = capturedTx.partnerBalanceChange.createMany.mock.calls.flatMap((c: any) => c[0].data);
+    expect(changes).toEqual([
+      expect.objectContaining({ partnerType: 'disco', partnerId: 10, balanceDeltaKobo: -454545, outstandingDeltaKobo: 454545 }),
+      expect.objectContaining({ partnerType: 'aggregator', outstandingDeltaKobo: 454545, balanceDeltaKobo: 0 }),
+    ]);
+    // No advance waits on the partner rows any more.
+    expect(capturedTx.discoAdmin.update).not.toHaveBeenCalled();
+    expect(capturedTx.aggregator.update).not.toHaveBeenCalled();
+    // The response's disco balance = its row (₦500,000) + changes not yet folded in.
+    const body = await res.json();
+    expect(body.data.disco.newBalance).toBeCloseTo(500000 - 4545.45, 2);
+  });
+
   it('approves, runs the transaction, writes the idempotency record inside it, and returns 201', async () => {
     let capturedTx: any;
     mockPrisma.$transaction.mockImplementation(async (cb: any) => {

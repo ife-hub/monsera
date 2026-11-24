@@ -1,3 +1,4 @@
+export {}; // a module, so its top-level names stay its own
 /**
  * adjustWallet against a real Postgres: the guarantees the money path relies
  * on when many advances hit Wallet A at once.

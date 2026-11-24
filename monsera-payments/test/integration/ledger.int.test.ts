@@ -192,6 +192,21 @@ suite('ledger lifecycle on a real database', () => {
     expect((await controllingIdentity(windowEnd)).holds).toBe(true);
   });
 
+  it('disco and aggregator totals, once folded in, match the obligations: + disbursed, − principal recovered', async () => {
+    const { foldAllPartnerChanges, partnerTotals } = await import('@/lib/partner-totals');
+    const [{ disbursed, principal }] = await prisma.$queryRaw`
+      SELECT SUM("disbursedKobo")::int AS disbursed, SUM("principalRecoveredKobo")::int AS principal FROM "Obligation"`;
+    const disco = await prisma.discoAdmin.findFirst({ where: { name: 'Ikeja Electric' } });
+    // Exact before folding (row + pending) and after.
+    expect(await partnerTotals('disco', disco.id)).toEqual({ balanceKobo: -disbursed, outstandingKobo: disbursed - principal });
+    await foldAllPartnerChanges();
+    const folded = await prisma.discoAdmin.findUnique({ where: { id: disco.id } });
+    expect(Math.round(Number(folded.balance) * 100)).toBe(-disbursed);
+    expect(Math.round(Number(folded.outstanding) * 100)).toBe(disbursed - principal);
+    const agg = await prisma.aggregator.findFirst();
+    expect(Math.round(Number(agg.outstanding) * 100)).toBe(disbursed - principal);
+  });
+
   it('criterion 3: declines (HTTP 200) rather than overdrawing Wallet A, and Wallet A never goes negative', async () => {
     await prisma.cohortMeter.create({ data: { meterToken: 'M-BIG' } });
     // ₦100 left in Wallet A in total (direct edit of every Wallet A row, for the test only)

@@ -120,6 +120,7 @@ function makeTxMock({
     wallet: { update: jest.fn().mockResolvedValue({}) },
     walletTransaction: { create: jest.fn().mockResolvedValue({ id: 999 }) },
     obligationRecovery: { create: jest.fn().mockResolvedValue({}) },
+    partnerBalanceChange: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
     customer: { update: jest.fn().mockResolvedValue({ id: 100, meterToken: 'MT-001', outstanding: 0, status: 'active' }) },
     discoAdmin: { update: jest.fn().mockResolvedValue({ ...discoAdmin, id: discoAdmin.id }) },
     aggregator: { update: jest.fn().mockResolvedValue({ id: 1, outstanding: 0 }) },
@@ -432,11 +433,15 @@ describe('credit route — Wallet B, MonseraEarnings, and side effects', () => {
     });
     await creditPost(req);
 
-    const discoDecrement = capturedTx.discoAdmin.update.mock.calls[0][0].data.outstanding.decrement;
-    const aggDecrement = capturedTx.aggregator.update.mock.calls[0][0].data.outstanding.decrement;
+    // Recorded as pending partner changes (lib/partner-totals.ts), not direct row updates.
+    const changes = capturedTx.partnerBalanceChange.createMany.mock.calls.flatMap((c: any) => c[0].data);
     // principal = 200000 kobo = 2000 naira, service = 20000 kobo goes to disco/agg as commission, not principal
-    expect(discoDecrement.toNumber()).toBeCloseTo(2000, 5);
-    expect(aggDecrement.toNumber()).toBeCloseTo(2000, 5);
+    expect(changes).toEqual([
+      expect.objectContaining({ partnerType: 'disco', outstandingDeltaKobo: -200000, balanceDeltaKobo: 0 }),
+      expect.objectContaining({ partnerType: 'aggregator', outstandingDeltaKobo: -200000, balanceDeltaKobo: 0 }),
+    ]);
+    expect(capturedTx.discoAdmin.update).not.toHaveBeenCalled();
+    expect(capturedTx.aggregator.update).not.toHaveBeenCalled();
   });
 
   it('does not touch aggregator.update when the caller is a disco admin, not an aggregator', async () => {
@@ -454,6 +459,8 @@ describe('credit route — Wallet B, MonseraEarnings, and side effects', () => {
     await creditPost(req);
 
     expect(capturedTx.aggregator.update).not.toHaveBeenCalled();
+    const changes = capturedTx.partnerBalanceChange.createMany.mock.calls.flatMap((c: any) => c[0].data);
+    expect(changes.map((c: any) => c.partnerType)).toEqual(['disco']);
   });
 
   it('creates a MonseraEarnings record for the service-charge portion of the recovery', async () => {

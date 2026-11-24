@@ -9,6 +9,7 @@ import { handleOptions, getCorsHeaders } from '../../../../lib/cors';
 import { isEnabled } from '../../../../lib/feature-flags';
 import { adjustWallet, WALLET_B_ID } from '../../../../lib/wallets';
 import { classifyObligation } from '../../../../lib/recovery-window';
+import { recordPartnerChanges } from '../../../../lib/partner-totals';
 import { MONEY_TX_OPTIONS, callerGone, isDatabaseOverloaded, overloadedResponse } from '../../../../lib/db-overload';
 
 
@@ -251,25 +252,15 @@ async function creditHandler(request: AuthenticatedRequest) {
       });
 
       // Update disco outstanding
-      const updatedDiscoAdmin = await tx.discoAdmin.update({
-        where: { id: discoAdmin.id },
-        data: {
-          outstanding: { decrement: new Prisma.Decimal(totalPrincipalKobo / 100) },
-          lastInteraction: new Date(),
-        },
-      });
-
-      // Aggregator if applicable
-      let updatedAggregator = null;
-      if (isAggregator && aggregator) {
-        updatedAggregator = await tx.aggregator.update({
-          where: { id: aggregator.id },
-          data: {
-            outstanding: { decrement: new Prisma.Decimal(totalPrincipalKobo / 100) },
-            lastInteraction: new Date(),
-          },
-        });
-      }
+      // Disco/aggregator running totals: recorded as pending changes, not as
+      // updates to the partner rows every repayment would queue on; folded in
+      // within seconds (lib/partner-totals.ts).
+      await recordPartnerChanges(tx, [
+        { partnerType: 'disco', partnerId: discoAdmin.id, outstandingDeltaKobo: -totalPrincipalKobo, reference: repaymentTransaction.transactionId },
+        ...(isAggregator && aggregator
+          ? [{ partnerType: 'aggregator' as const, partnerId: aggregator.id, outstandingDeltaKobo: -totalPrincipalKobo, reference: repaymentTransaction.transactionId }]
+          : []),
+      ]);
 
       // MonseraEarnings — service charge component is Monsera's fee
       const monseraEarning = await tx.monseraEarnings.create({
@@ -326,8 +317,6 @@ async function creditHandler(request: AuthenticatedRequest) {
         repaymentTransaction,
         recoveries,
         updatedCustomer,
-        updatedDiscoAdmin,
-        updatedAggregator,
         monseraEarning,
         totalRecoveredKobo,
         totalPrincipalKobo,
