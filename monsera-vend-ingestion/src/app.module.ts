@@ -1,19 +1,14 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { ScheduleModule } from '@nestjs/schedule';
-import { BullModule } from '@nestjs/bullmq';
-import { PrismaModule } from './prisma/prisma.module';
-import { VendModule } from './vend/vend.module';
 import { HealthController } from './health/health.controller';
+import { WorkersService } from './workers.service';
 
+/**
+ * monsera-vend-ingestion: vend records pushed by discos (single and batch),
+ * the vend-metrics worker that turns them into scoring features, and the
+ * daily vend failure report. HTTP API mounted from src/routes.ts.
+ */
 @Module({
-  imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
-    ScheduleModule.forRoot(),
-    BullModule.forRoot({ connection: { url: process.env.REDIS_URL, maxRetriesPerRequest: null } }),
-    PrismaModule,
-    VendModule,
-  ],
   controllers: [HealthController],
+  providers: [WorkersService],
 })
 export class AppModule {}
