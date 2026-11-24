@@ -47,6 +47,7 @@ import prisma from '@/lib/prisma';
 import * as Sentry from '@sentry/nextjs';
 import { checkIdempotency, saveIdempotencyRecordTx } from '@/lib/idempotency';
 import { POST as debitPost } from '@/app/api/transactions/debit/route';
+import { isAdjustWalletSql, fakeAdjustWallet } from '../helpers/wallet-sql';
 
 const mockPrisma = prisma as any;
 const mockCheckIdempotency = checkIdempotency as jest.Mock;
@@ -84,13 +85,15 @@ function makeTxMock(overrides: Record<string, any> = {}, { walletBalanceNaira = 
   const discoAdmin = { id: 10, name: 'IKEDC', status: 'active', apiKey: 'valid-key', balance: 500000, outstanding: 0 };
   const customer = { id: 100, meterToken: 'MT-001', outstanding: 0, band: 'B', status: 'active' };
 
-  return {
+  const balances: Record<number, number> = { 1: walletA.balance };
+  const tx: any = {
     $executeRaw: jest.fn().mockResolvedValue(undefined),
     // Row locks: lockWallet reads the locked Wallet A balance; the debit
     // handler then locks the customer row by meterToken.
-    $queryRaw: jest.fn().mockImplementation(async (strings: TemplateStringsArray) => {
+    $queryRaw: jest.fn().mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join('?');
-      if (sql.includes('"Wallet"')) return [{ balance: walletA.balance }];
+      if (isAdjustWalletSql(strings)) return fakeAdjustWallet(tx, balances, values);
+      if (sql.includes('"Wallet"')) return [{ balance: balances[1] }];
       if (sql.includes('"Customers"')) return [{ id: customer.id }];
       return [];
     }),
@@ -120,6 +123,7 @@ function makeTxMock(overrides: Record<string, any> = {}, { walletBalanceNaira = 
     audit: { create: jest.fn().mockResolvedValue({}) },
     ...overrides,
   };
+  return tx;
 }
 
 beforeEach(() => {

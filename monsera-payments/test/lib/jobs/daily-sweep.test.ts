@@ -15,6 +15,7 @@ jest.mock('@/lib/prisma', () => ({
 import * as Sentry from '@sentry/nextjs';
 import prisma from '@/lib/prisma';
 import { runDailySweep } from '@/lib/jobs/daily-sweep';
+import { isAdjustWalletSql, fakeAdjustWallet } from '../../helpers/wallet-sql';
 
 const mockPrisma = prisma as any;
 const mockSentry = Sentry as unknown as { captureException: jest.Mock };
@@ -25,8 +26,12 @@ beforeEach(() => {
   process.env.WALLET_B_ID = '2';
   mockPrisma.audit.create.mockResolvedValue({});
   mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockPrisma));
-  // Wallet lock: Wallet B holds plenty of recovered cash.
-  mockPrisma.$queryRaw.mockResolvedValue([{ balance: 1_000_000 }]);
+  // Wallet B holds plenty of recovered cash; adjustWallet's single statement
+  // is answered by the shared fake (test/helpers/wallet-sql.ts).
+  const balances: Record<number, number> = { 1: 0, 2: 1_000_000 };
+  mockPrisma.$queryRaw.mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) =>
+    isAdjustWalletSql(strings) ? fakeAdjustWallet(mockPrisma, balances, values) : [{ balance: balances[2] }]
+  );
   mockPrisma.wallet.update.mockResolvedValue({});
   mockPrisma.walletTransaction.create.mockResolvedValue({ id: 1 });
   mockPrisma.obligationRecovery.updateMany.mockImplementation(async ({ where }: any) => ({ count: where.id.in.length }));
