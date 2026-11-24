@@ -53,4 +53,5 @@ async function getHandler(request: AuthenticatedRequest, context: { params: Prom
     }
 }
 
-export const GET = authenticate(getHandler);
+// Wallet A/B/C balances are Monsera's own float: staff and finance houses only.
+export const GET = authorize(UserType.MONSERA_ADMIN, UserType.EMPLOYEE, UserType.FINANCE_HOUSE)(getHandler);
