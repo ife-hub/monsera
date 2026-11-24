@@ -1,9 +1,16 @@
-
 {
-  "name": "monsera-dev",
+  "name": "monsera",
   "private": true,
+  "description": "Monsera platform: gateway + services. See README.md.",
   "scripts": {
-    "dev": "concurrently -n gateway,payments,auth,vend,admin \"npm --prefix ./monsera-gateway run start:dev\" \"npm --prefix ./monsera-payments run start:dev\" \"npm --prefix ./monsera-users-admin run start:dev\" \"npm --prefix ./monsera-vend-ingestion run start:dev\" \"npm --prefix ./monsera-admin run start:dev\" \"npm --prefix ./monsera-notifications run start:dev\""
+    "dev": "concurrently -n gateway,payments,users,vend,admin,notify \"npm --prefix ./monsera-gateway run start:dev\" \"npm --prefix ./monsera-payments run start:dev\" \"npm --prefix ./monsera-users-admin run start:dev\" \"npm --prefix ./monsera-vend-ingestion run start:dev\" \"npm --prefix ./monsera-admin run start:dev\" \"npm --prefix ./monsera-notifications run start:dev\"",
+    "install:all": "for d in db monsera-*; do (cd $d && npm ci) || exit 1; done",
+    "test:all": "for d in monsera-*; do echo \"== $d\"; (cd $d && npm test --silent) || exit 1; done",
+    "typecheck:all": "for d in monsera-*; do echo \"== $d\"; (cd $d && npm run typecheck --silent) || exit 1; done",
+    "schema:sync": "node scripts/sync-schema.mjs",
+    "schema:check": "node scripts/sync-schema.mjs --check",
+    "migrate": "npm --prefix db run migrate:deploy",
+    "stress": "node stress/stress-test.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

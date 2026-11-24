@@ -1,12 +1,17 @@
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { PrismaModule } from './prisma/prisma.module';
-import { AuthModule } from './auth/auth.module';
-import { UsersModule } from './users/users.module';
+import { Module, OnApplicationShutdown } from '@nestjs/common';
 import { HealthController } from './health/health.controller';
+import prisma from './lib/prisma';
 
+/**
+ * monsera-users-admin: sign-in (with Redis-backed throttling), the current
+ * user, password changes (which revoke older tokens), user accounts and user
+ * types. HTTP API mounted from src/routes.ts.
+ */
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, AuthModule, UsersModule],
   controllers: [HealthController],
 })
-export class AppModule {}
+export class AppModule implements OnApplicationShutdown {
+  async onApplicationShutdown() {
+    await prisma.$disconnect();
+  }
+}

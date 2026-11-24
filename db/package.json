@@ -1,0 +1,14 @@
+{
+  "name": "monsera-db",
+  "private": true,
+  "description": "The single Monsera database schema and its migrations. Every service's prisma/schema.prisma is a copy of db/schema.prisma (npm run schema:sync at the repo root).",
+  "scripts": {
+    "migrate:deploy": "prisma migrate deploy --schema schema.prisma",
+    "migrate:dev": "prisma migrate dev --schema schema.prisma",
+    "migrate:status": "prisma migrate status --schema schema.prisma",
+    "validate": "prisma validate --schema schema.prisma"
+  },
+  "devDependencies": {
+    "prisma": "6.19.0"
+  }
+}
