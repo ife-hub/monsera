@@ -295,15 +295,21 @@ async function setup(p95Meters, { topup = true } = {}) {
   // row) with the balance moved by the same amount, under the wallet lock.
   const topupKobo = topup ? Math.round(TOPUP_NAIRA * 100) : 0;
   if (topupKobo > 0) {
-    await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id = ${WALLET.A} FOR UPDATE`;
-      for (let left = topupKobo; left > 0; left -= 2_000_000_000) {
-        await tx.walletTransaction.create({
-          data: { walletId: WALLET.A, type: 'top-up', amountKobo: Math.min(left, 2_000_000_000), referenceId: `stress-${RUN_ID}`, description: `Stress test float top-up (${RUN_ID})` },
-        });
-      }
-      await tx.$executeRaw`UPDATE "Wallet" SET balance = COALESCE(balance, 0) + ${topupKobo}::numeric / 100, "updatedAt" = now() WHERE id = ${WALLET.A}`;
-    });
+    const rows = [];
+    for (let left = topupKobo; left > 0; left -= 2_000_000_000) {
+      rows.push({ walletId: WALLET.A, type: 'top-up', amountKobo: Math.min(left, 2_000_000_000), referenceId: `stress-${RUN_ID}`, description: `Stress test float top-up (${RUN_ID})` });
+    }
+    // Three round trips, and a generous time limit: from a laptop each one
+    // crosses the internet, and the lock may wait for advances in flight
+    // (Prisma's 5s default expired here: "Transaction not found", P2028).
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id = ${WALLET.A} FOR UPDATE`;
+        await tx.walletTransaction.createMany({ data: rows });
+        await tx.$executeRaw`UPDATE "Wallet" SET balance = COALESCE(balance, 0) + ${topupKobo}::numeric / 100, "updatedAt" = now() WHERE id = ${WALLET.A}`;
+      },
+      { maxWait: 20_000, timeout: 60_000 },
+    );
   }
 
   // Cohort: the shared pool plus this run's own meters.
