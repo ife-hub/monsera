@@ -86,7 +86,7 @@ import { randomUUID } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import prismaPkg from '@prisma/client';
 
-const { PrismaClient } = prismaPkg;
+const { PrismaClient, Prisma } = prismaPkg;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Settings come from .env on a laptop. On a server (e.g. the app's own
 // container) they are already environment variables and there is no .env,
@@ -536,10 +536,12 @@ async function p95(meters) {
   let declines = 0;
   let failures = 0;
   let stopEarly = false;
+  const clientMs = new Map(); // meter -> total time measured here, approved advances only
   const worker = async () => {
     while (performance.now() < end && next < meters.length && !stopEarly) {
       const n = next++;
       const r = await debit(meters[n], TIERS[n % TIERS.length], 'eligibility');
+      if (r.status === 201) clientMs.set(meters[n], r.ms);
       if (r.status === 201) approvals++;
       else if (r.status === 200) declines++;
       else {
@@ -553,12 +555,94 @@ async function p95(meters) {
       }
     }
   };
+  // Network + gateway alone: the gateway's /health touches no service and no
+  // database, so its round trip is the floor every request pays.
+  const pingMs = [];
+  let pinging = true;
+  const pinger = (async () => {
+    while (pinging) {
+      const t = performance.now();
+      await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(10_000) }).catch(() => null);
+      pingMs.push(performance.now() - t);
+      await sleep(500);
+    }
+  })();
   const started = performance.now();
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  pinging = false;
+  await pinger;
   if (next >= meters.length && performance.now() < end) {
     console.log(`  used all ${meters.length} prepared meters after ${((performance.now() - started) / 1000).toFixed(0)}s (of ${P95_SECONDS}s); raise P95_METERS for a full-length run`);
   }
+  await timeBreakdown(clientMs, pingMs);
   return { approvals, declines, failures };
+}
+
+/**
+ * Where an approved advance's time goes, from timestamps payments already
+ * records, lined up with the total measured here:
+ *   scoring              DecisionLog.latencyMs
+ *   scoring end          Transactions.date (set right after scoring)
+ *   money tx start       Transactions.createdAt (Postgres now() = the moment the transaction began)
+ *   decision written     DecisionLog.timestampUtc (inside the transaction)
+ * Segments that compare the app's clock with the database's are subject to
+ * their (normally millisecond) clock difference.
+ */
+async function timeBreakdown(clientMs, pingMs) {
+  if (clientMs.size === 0) return;
+  const meters = [...clientMs.keys()];
+  const rows = [];
+  for (let i = 0; i < meters.length; i += 1000) {
+    rows.push(
+      ...(await prisma.$queryRaw`
+        SELECT t.branch AS meter,
+               EXTRACT(EPOCH FROM t.date) * 1000         AS scoring_end,
+               EXTRACT(EPOCH FROM t."createdAt") * 1000  AS tx_start,
+               EXTRACT(EPOCH FROM d."timestampUtc") * 1000 AS decided,
+               d."latencyMs"                             AS scoring
+        FROM "Transactions" t
+        JOIN "DecisionLog" d ON d."correlationId" = t."transactionId"
+        WHERE t."transactionType" = 'debit' AND t.branch IN (${Prisma.join(meters.slice(i, i + 1000))})`)
+    );
+  }
+  if (rows.length === 0) return;
+
+  const ping = { p50: percentile(pingMs, 50), p95: percentile(pingMs, 95) };
+  const parts = { total: [], scoring: [], waitTx: [], txFirst: [], rest: [] };
+  for (const r of rows) {
+    const total = clientMs.get(r.meter);
+    if (total === undefined) continue;
+    const scoring = Number(r.scoring);
+    const waitTx = Number(r.tx_start) - Number(r.scoring_end);
+    const txFirst = Number(r.decided) - Number(r.tx_start);
+    parts.total.push(total);
+    parts.scoring.push(scoring);
+    parts.waitTx.push(waitTx);
+    parts.txFirst.push(txFirst);
+    parts.rest.push(total - scoring - waitTx - txFirst);
+  }
+  const fmt = (v) => (v === undefined || Number.isNaN(v) ? '-' : v.toFixed(0)).padStart(7);
+  const line = (label, values) => console.log(`  ${label.padEnd(58)} ${fmt(percentile(values, 50))} ${fmt(percentile(values, 95))}`);
+  console.log(`\n== Where the time goes (${parts.total.length} approved advances, ms)`);
+  console.log(`  ${''.padEnd(58)}  median     p95`);
+  line('total, as measured by this script', parts.total);
+  console.log(`  ${'  network + gateway (pinging the gateway during the test)'.padEnd(58)} ${fmt(ping.p50)} ${fmt(ping.p95)}`);
+  line('  scoring engine', parts.scoring);
+  line('  waiting to start the money transaction (DB connection)', parts.waitTx);
+  line('  money transaction up to the decision (locks, inserts)', parts.txFirst);
+  line('  everything else (see below)', parts.rest);
+  console.log('  "Everything else" = the network + gateway above, plus inside payments: the sign-in check,');
+  console.log('  partner/idempotency/cohort/feature/rule queries before scoring, and the end of the money');
+  console.log('  transaction (Wallet A lock, commit). Medians and p95s of the parts do not add up exactly.');
+  const restMinusNetwork = percentile(parts.rest, 50) - ping.p50;
+  const biggest = [
+    ['network + gateway', ping.p50],
+    ['scoring engine', percentile(parts.scoring, 50)],
+    ['waiting for a database connection for the money transaction', percentile(parts.waitTx, 50)],
+    ['the first part of the money transaction', percentile(parts.txFirst, 50)],
+    ['payments before scoring / Wallet A lock and commit', restMinusNetwork],
+  ].sort((a, b) => b[1] - a[1])[0];
+  console.log(`  → largest share (median): ${biggest[0]}, about ${biggest[1].toFixed(0)}ms`);
 }
 
 // ── Vend ingestion (VENDS=1 or ONLY=vends) ─────────────────────────────────
