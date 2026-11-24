@@ -608,3 +608,22 @@ enum WalletType {
   B  // Repayment wallet — receives recoveries
   C // Monsera Wallet
 }
+
+/// Pending changes to disco and aggregator running totals (balance,
+/// outstanding, lastInteraction). Advances and repayments append here instead
+/// of updating the partner row every advance would queue on; monsera-payments
+/// folds them into the totals every couple of seconds (lib/partner-totals.ts).
+model PartnerBalanceChange {
+  id                   Int       @id @default(autoincrement())
+  partnerType          String    // 'disco' | 'aggregator'
+  partnerId            Int
+  balanceDeltaKobo     Int       @default(0)
+  outstandingDeltaKobo Int       @default(0)
+  interactionAt        DateTime
+  reference            String?   // e.g. the transaction id
+  createdAt            DateTime  @default(now())
+  appliedAt            DateTime?
+
+  @@index([appliedAt, id])
+  @@index([partnerType, partnerId, appliedAt])
+}

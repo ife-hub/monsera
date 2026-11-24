@@ -8,6 +8,8 @@ import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } fro
 export class WorkersService implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(WorkersService.name);
   private workers: { close(): Promise<void> }[] = [];
+  private foldTimer: NodeJS.Timeout | null = null;
+  private folding: Promise<unknown> | null = null;
 
   async onApplicationBootstrap() {
     // Wallet A's sub-wallets (lib/wallet-a.ts): create any missing, spread the money.
@@ -21,9 +23,20 @@ export class WorkersService implements OnApplicationBootstrap, OnApplicationShut
     }
 
     if (process.env.RUN_WORKERS === 'false') {
-      this.logger.log('RUN_WORKERS=false: queue workers and schedules not started on this instance');
+      this.logger.log('RUN_WORKERS=false: queue workers, schedules and partner-total folding not started on this instance');
       return;
     }
+
+    // Disco/aggregator running totals: add pending changes into the partner
+    // rows every PARTNER_TOTALS_FOLD_MS (default 2s; lib/partner-totals.ts).
+    // Runs on every worker instance; each fold claims its own rows.
+    const { foldAllPartnerChanges } = await import('./lib/partner-totals');
+    const everyMs = Math.max(250, Number(process.env.PARTNER_TOTALS_FOLD_MS ?? 2000));
+    this.foldTimer = setInterval(() => {
+      if (this.folding) return; // the previous fold is still running
+      this.folding = foldAllPartnerChanges().finally(() => (this.folding = null));
+    }, everyMs);
+
     const { recoveryWorker, scheduledJobsWorker } = await import('./lib/workers');
     this.workers = [recoveryWorker, scheduledJobsWorker];
     const { registerSchedules } = await import('./lib/scheduled-jobs');
@@ -37,6 +50,13 @@ export class WorkersService implements OnApplicationBootstrap, OnApplicationShut
   }
 
   async onApplicationShutdown() {
+    if (this.foldTimer) clearInterval(this.foldTimer);
+    await this.folding;
+    if (this.foldTimer) {
+      // Leave nothing pending on a deploy.
+      const { foldAllPartnerChanges } = await import('./lib/partner-totals');
+      await foldAllPartnerChanges();
+    }
     await Promise.allSettled(this.workers.map((w) => w.close()));
     const { default: prisma } = await import('./lib/prisma');
     await prisma.$disconnect();

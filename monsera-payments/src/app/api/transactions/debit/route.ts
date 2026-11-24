@@ -11,6 +11,7 @@ import { handleOptions, getCorsHeaders } from '../../../../lib/cors';
 import { isEnabled } from '../../../../lib/feature-flags';
 import { InsufficientWalletBalanceError } from '../../../../lib/wallets';
 import { debitWalletA, walletABalanceKobo } from '../../../../lib/wallet-a';
+import { recordPartnerChanges, partnerTotals } from '../../../../lib/partner-totals';
 import { isInCohort } from '../../../../lib/cohort';
 import { recordDecision, type DecisionRecord } from '../../../../lib/decision-log';
 import { computeWindows } from '../../../../lib/recovery-window';
@@ -385,23 +386,16 @@ async function debitHandler(request: AuthenticatedRequest) {
         await saveIdempotencyRecordTx(tx, idempotencyKey!, callerId, callerType, 201, responseBodyForIdempotency);
 
         // ── Shared rows last ──
-        const updatedDiscoAdmin = await tx.discoAdmin.update({
-          where: { id: discoAdmin.id },
-          data: {
-            balance: { decrement: new Prisma.Decimal(calc.disbursedKobo).div(100) },
-            outstanding: { increment: new Prisma.Decimal(calc.disbursedKobo).div(100) },
-            lastInteraction: new Date(),
-          },
-        });
-        if (isAggregator && aggregator) {
-          await tx.aggregator.update({
-            where: { id: aggregator.id },
-            data: {
-              outstanding: { increment: new Prisma.Decimal(calc.disbursedKobo).div(100) },
-              lastInteraction: new Date(),
-            },
-          });
-        }
+        // Disco/aggregator running totals: recorded as pending changes, not as
+        // updates to the partner rows every advance would queue on; folded in
+        // within seconds (lib/partner-totals.ts). Nothing funds or refuses an
+        // advance from these totals; Wallet A below is the funding check.
+        await recordPartnerChanges(tx, [
+          { partnerType: 'disco', partnerId: discoAdmin.id, balanceDeltaKobo: -calc.disbursedKobo, outstandingDeltaKobo: calc.disbursedKobo, reference: transactionId },
+          ...(isAggregator && aggregator
+            ? [{ partnerType: 'aggregator' as const, partnerId: aggregator.id, outstandingDeltaKobo: calc.disbursedKobo, reference: transactionId }]
+            : []),
+        ]);
         // §3.3/§7.2: taken from a Wallet A row that can cover it, checked under
         // its lock; never negative. §3.6: only the disbursed (token) value
         // leaves Wallet A; Wallet B is untouched. Wallet A is split into
@@ -411,7 +405,7 @@ async function debitHandler(request: AuthenticatedRequest) {
           `Disbursement for meter ${meterToken}: ${calc.disbursedKobo} kobo`, transactionId
         );
 
-        return { transaction, obligation, updatedCustomer, updatedDiscoAdmin, rowBalanceKobo: newBalanceKobo };
+        return { transaction, obligation, updatedCustomer, rowBalanceKobo: newBalanceKobo };
       }, MONEY_TX_OPTIONS);
     } catch (txError: any) {
       // Declined inside the transaction (it rolled back, nothing was
@@ -479,9 +473,10 @@ async function debitHandler(request: AuthenticatedRequest) {
           status: result.updatedCustomer.status,
         },
         disco: {
-          id: result.updatedDiscoAdmin.id,
-          name: result.updatedDiscoAdmin.name,
-          newBalance: Number(result.updatedDiscoAdmin.balance),
+          id: discoAdmin.id,
+          name: discoAdmin.name,
+          // Exact current figure: the disco's row plus changes not yet folded in.
+          newBalance: (await partnerTotals('disco', discoAdmin.id)).balanceKobo / 100,
         },
         scoringEvaluation: {
           decision: 'approved',
