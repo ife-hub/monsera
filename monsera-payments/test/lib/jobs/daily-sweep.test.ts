@@ -1,4 +1,6 @@
 jest.mock('@sentry/nextjs', () => ({ __esModule: true, captureException: jest.fn() }));
+// The post-sweep spread over Wallet A's sub-wallets is covered by the real-database tests.
+jest.mock('@/lib/wallet-a', () => ({ __esModule: true, rebalanceWalletAQuietly: jest.fn() }));
 
 jest.mock('@/lib/prisma', () => ({
   __esModule: true,

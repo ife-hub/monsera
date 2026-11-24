@@ -295,18 +295,28 @@ async function setup(p95Meters, { topup = true } = {}) {
   // row) with the balance moved by the same amount, under the wallet lock.
   const topupKobo = topup ? Math.round(TOPUP_NAIRA * 100) : 0;
   if (topupKobo > 0) {
+    // Wallet A may be split into sub-wallets (monsera-payments lib/wallet-a.ts):
+    // spread the top-up evenly over its rows, as the platform's own rebalance
+    // would, so advances can use them in parallel from the start.
+    const aRows = await walletARowIds();
+    const perRow = Math.floor(topupKobo / aRows.length);
+    const shares = aRows.map((id, i) => ({ id, kobo: perRow + (i === 0 ? topupKobo - perRow * aRows.length : 0) }));
     const rows = [];
-    for (let left = topupKobo; left > 0; left -= 2_000_000_000) {
-      rows.push({ walletId: WALLET.A, type: 'top-up', amountKobo: Math.min(left, 2_000_000_000), referenceId: `stress-${RUN_ID}`, description: `Stress test float top-up (${RUN_ID})` });
+    for (const { id, kobo } of shares) {
+      for (let left = kobo; left > 0; left -= 2_000_000_000) {
+        rows.push({ walletId: id, type: 'top-up', amountKobo: Math.min(left, 2_000_000_000), referenceId: `stress-${RUN_ID}`, description: `Stress test float top-up (${RUN_ID})` });
+      }
     }
-    // Three round trips, and a generous time limit: from a laptop each one
-    // crosses the internet, and the lock may wait for advances in flight
+    // Few round trips, and a generous time limit: from a laptop each one
+    // crosses the internet, and the locks may wait for advances in flight
     // (Prisma's 5s default expired here: "Transaction not found", P2028).
     await prisma.$transaction(
       async (tx) => {
-        await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id = ${WALLET.A} FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM "Wallet" WHERE id IN (${Prisma.join(aRows)}) ORDER BY id FOR UPDATE`;
         await tx.walletTransaction.createMany({ data: rows });
-        await tx.$executeRaw`UPDATE "Wallet" SET balance = COALESCE(balance, 0) + ${topupKobo}::numeric / 100, "updatedAt" = now() WHERE id = ${WALLET.A}`;
+        for (const { id, kobo } of shares) {
+          await tx.$executeRaw`UPDATE "Wallet" SET balance = COALESCE(balance, 0) + ${kobo}::numeric / 100, "updatedAt" = now() WHERE id = ${id}`;
+        }
       },
       { maxWait: 20_000, timeout: 60_000 },
     );
@@ -338,13 +348,24 @@ async function invariants() {
 }
 
 /** Controlling identity, signed: (A + B + outstanding) − (float deployed + commission not yet paid out). */
+/** Wallet A's rows: Wallet A plus any sub-wallets (databases without the column: just Wallet A). */
+async function walletARowIds() {
+  try {
+    const rows = await prisma.$queryRaw`SELECT id FROM "Wallet" WHERE id = ${WALLET.A} OR "parentWalletId" = ${WALLET.A} ORDER BY id`;
+    return rows.length ? rows.map((r) => r.id) : [WALLET.A];
+  } catch {
+    return [WALLET.A];
+  }
+}
+
 async function identityKobo() {
+  const abRows = [...(await walletARowIds()), WALLET.B];
   const [row] = await prisma.$queryRaw`
     SELECT
-      (SELECT COALESCE(ROUND(SUM(balance) * 100), 0) FROM "Wallet" WHERE id IN (${WALLET.A}, ${WALLET.B})) AS wallets,
+      (SELECT COALESCE(ROUND(SUM(balance) * 100), 0) FROM "Wallet" WHERE id IN (${Prisma.join(abRows)})) AS wallets,
       (SELECT COALESCE(SUM("remainingKobo"), 0) FROM "Obligation") AS outstanding,
       (SELECT COALESCE(SUM("amountKobo"), 0) FROM "WalletTransaction"
-        WHERE "walletId" IN (${WALLET.A}, ${WALLET.B}) AND type IN ('top-up', 'allocation', 'withdrawal', 'opening-balance')) AS deployed,
+        WHERE "walletId" IN (${Prisma.join(abRows)}) AND type IN ('top-up', 'allocation', 'withdrawal', 'opening-balance')) AS deployed,
       (SELECT COALESCE(SUM("serviceKobo"), 0) FROM "Obligation") AS accrued,
       (SELECT COALESCE(SUM("amountKobo"), 0) FROM "WalletTransaction" WHERE "walletId" = ${WALLET.B} AND type = 'commission-payout') AS payouts`;
   return num(row.wallets) + num(row.outstanding) - (num(row.deployed) + num(row.accrued) + num(row.payouts));

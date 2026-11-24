@@ -10,6 +10,16 @@ export class WorkersService implements OnApplicationBootstrap, OnApplicationShut
   private workers: { close(): Promise<void> }[] = [];
 
   async onApplicationBootstrap() {
+    // Wallet A's sub-wallets (lib/wallet-a.ts): create any missing, spread the money.
+    try {
+      const { ensureWalletASubWallets, rebalanceWalletA } = await import('./lib/wallet-a');
+      const ids = await ensureWalletASubWallets();
+      await rebalanceWalletA();
+      if (ids.length) this.logger.log(`Wallet A rows: ${ids.join(', ')}`);
+    } catch (error: any) {
+      this.logger.error(`Could not prepare Wallet A sub-wallets: ${error.message}`);
+    }
+
     if (process.env.RUN_WORKERS === 'false') {
       this.logger.log('RUN_WORKERS=false: queue workers and schedules not started on this instance');
       return;

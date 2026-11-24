@@ -39,6 +39,7 @@ Changes from `monsera-backend`:
 - **Vend failure reports are delivered** (they were a logging stub) and only marked reported once delivered.
 - **Partners can no longer read each other's records**: `aggregators/:id`, `discos/:id`, `finance/:id` and `float-ledger/:id` are limited to staff or the partner itself; the discos list shows partners only id, name and status; meter state, loan thresholds, roles and the aggregators list are staff only; wallet balances are staff and finance houses only.
 - **A repayment never hangs on Redis**: the post-commit queue add times out after 2s.
+- **Wallet A is split into sub-wallets** (8 by default) so advances pay out in parallel instead of queueing on one locked row; reconciliation counts all of them as Wallet A (see `monsera-payments/README.md`).
 
 ## Data: one schema, declared owners
 

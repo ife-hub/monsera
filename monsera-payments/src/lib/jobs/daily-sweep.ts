@@ -1,6 +1,7 @@
 import * as Sentry from '../monitoring';
 import prisma from '../prisma';
 import { adjustWallet, WALLET_A_ID, WALLET_B_ID } from '../wallets';
+import { rebalanceWalletAQuietly } from '../wallet-a';
 import { watDate } from '../wat';
 
 const SYSTEM = { employeeName: 'System', emailAddress: 'system@monsera.com' };
@@ -84,6 +85,9 @@ export async function runDailySweep() {
             : `Daily sweep completed: ${result.sweptKobo} kobo principal moved from Wallet B to Wallet A. Recoveries covered: ${result.obligationCount}. Obligations: [${result.obligationIds.join(', ')}]. Run: ${runDate} WAT`,
       },
     });
+
+    // The swept principal landed on Wallet A itself: spread it over the sub-wallets.
+    if (result.sweptKobo > 0) await rebalanceWalletAQuietly();
 
     return result;
   } catch (error: any) {

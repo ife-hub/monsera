@@ -4,7 +4,8 @@ import prisma from '../../../../../lib/prisma';
 import { authorize, AuthenticatedRequest } from '../../../../../middleware/auth';
 import { UserType } from '@prisma/client';
 import { getCorsHeaders, handleOptions } from '../../../../../lib/cors';
-import { adjustWallet, nairaToKobo, InsufficientWalletBalanceError } from '../../../../../lib/wallets';
+import { adjustWallet, nairaToKobo, InsufficientWalletBalanceError, WALLET_A_ID } from '../../../../../lib/wallets';
+import { rebalanceWalletAQuietly } from '../../../../../lib/wallet-a';
 
 export function OPTIONS(request: Request) {
   return handleOptions(request);
@@ -35,9 +36,13 @@ async function putHandler(request: AuthenticatedRequest, context: { params: Prom
   }
 
   try {
-    const exists = await prisma.wallet.findUnique({ where: { id }, select: { id: true } });
+    const exists = await prisma.wallet.findUnique({ where: { id }, select: { id: true, parentWalletId: true } });
     if (!exists) {
       return NextResponse.json({ success: false, message: 'Wallet ID not found' }, { status: 404, headers });
+    }
+    if (exists.parentWalletId !== null) {
+      // Sub-wallets are managed by the platform (lib/wallet-a.ts); money moves through Wallet A.
+      return NextResponse.json({ success: false, message: `Wallet ${id} is part of Wallet A; use Wallet ${exists.parentWalletId} instead` }, { status: 400, headers });
     }
 
     const { wallet } = await prisma.$transaction(async (tx) => {
@@ -59,6 +64,9 @@ async function putHandler(request: AuthenticatedRequest, context: { params: Prom
       });
       return result;
     });
+
+    // New money on Wallet A: spread it over the sub-wallets so advances can use it in parallel.
+    if (id === WALLET_A_ID()) await rebalanceWalletAQuietly();
 
     return NextResponse.json({ success: true, data: wallet }, { headers });
   } catch (error) {

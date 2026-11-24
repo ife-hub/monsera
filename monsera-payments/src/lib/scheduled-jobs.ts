@@ -5,6 +5,7 @@ import { runReconciliation } from './jobs/reconciliation';
 import { runMonthlyReconciliation } from './jobs/monthly-reconciliation';
 import { runObligationStatusSweep } from './jobs/obligation-status-sweep';
 import { runIdempotencyCleanup } from './jobs/idempotency-cleanup';
+import { rebalanceWalletA } from './wallet-a';
 
 /**
  * The money jobs and when they run, in West Africa Time. Each can be moved
@@ -33,6 +34,8 @@ export const SCHEDULED_JOBS: ScheduledJob[] = [
   { name: 'reconciliation', envVar: 'CRON_RECONCILIATION', defaultPattern: '45 0 * * *', run: () => runReconciliation() },
   { name: 'monthly-reconciliation', envVar: 'CRON_MONTHLY_RECONCILIATION', defaultPattern: '0 2 1 * *', run: () => runMonthlyReconciliation() },
   { name: 'idempotency-cleanup', envVar: 'CRON_IDEMPOTENCY_CLEANUP', defaultPattern: '30 3 * * *', run: () => runIdempotencyCleanup() },
+  // Keeps Wallet A's money spread over its sub-wallets as advances drain them unevenly.
+  { name: 'wallet-a-rebalance', envVar: 'CRON_WALLET_A_REBALANCE', defaultPattern: '*/10 * * * *', run: () => rebalanceWalletA() },
 ];
 
 /**
