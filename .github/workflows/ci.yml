@@ -67,7 +67,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        context: [db, monsera-gateway, monsera-payments, monsera-users-admin, monsera-vend-ingestion, monsera-admin, monsera-notifications]
+        context: [db, stress, monsera-gateway, monsera-payments, monsera-users-admin, monsera-vend-ingestion, monsera-admin, monsera-notifications]
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t ${{ matrix.context }}:ci ${{ matrix.context }}
