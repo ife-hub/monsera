@@ -1,6 +1,7 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, HttpException, ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+
 
 type TransactionClient = Omit<Prisma.TransactionClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
 type CallerType = 'aggregator' | 'disco';
@@ -15,24 +16,46 @@ export class IdempotencyService {
    * or this is a replay — in the replay case the thrown body IS the
    * cached response, so the controller never has to special-case it.
    */
-  async checkIdempotency(key: string | undefined, callerId: number, callerType: CallerType): Promise<void> {
-    if (!key) {
-      throw new BadRequestException({ success: false, message: 'Idempotency-Key header is required' });
-    }
+  // async checkIdempotency(key: string | undefined, callerId: number, callerType: CallerType): Promise<void> {
+  //   if (!key) {
+  //     throw new BadRequestException({ success: false, message: 'Idempotency-Key header is required' });
+  //   }
 
-    const existing = await this.prisma.idempotencyRecord.findUnique({ where: { key } });
-    if (!existing) return;
+  //   const existing = await this.prisma.idempotencyRecord.findUnique({ where: { key } });
+  //   if (!existing) return;
 
-    const ownedByAggregator = callerType === 'aggregator' && existing.aggregatorId === callerId;
-    const ownedByDisco = callerType === 'disco' && existing.discoAdminId === callerId;
-    if (!ownedByAggregator && !ownedByDisco) {
-      throw new ForbiddenException({ success: false, message: 'Idempotency key belongs to a different caller' });
-    }
+  //   const ownedByAggregator = callerType === 'aggregator' && existing.aggregatorId === callerId;
+  //   const ownedByDisco = callerType === 'disco' && existing.discoAdminId === callerId;
+  //   if (!ownedByAggregator && !ownedByDisco) {
+  //     throw new ForbiddenException({ success: false, message: 'Idempotency key belongs to a different caller' });
+  //   }
 
-    // Replay: throw the cached status/body directly as the response.
-    const { HttpException } = await import('@nestjs/common');
-    throw new HttpException(existing.responseBody as object, existing.responseStatus);
+  //   // Replay: throw the cached status/body directly as the response.
+  //   const { HttpException } = await import('@nestjs/common');
+  //   throw new HttpException(existing.responseBody as object, existing.responseStatus);
+  // }
+
+  async checkIdempotency(
+  key: string | undefined,
+  callerId: number,
+  callerType: CallerType,
+  db: TransactionClient = this.prisma, // pass `tx` to run the check inside a transaction
+): Promise<void> {
+  if (!key) {
+    throw new BadRequestException({ success: false, message: 'Idempotency-Key header is required' });
   }
+
+  const existing = await db.idempotencyRecord.findUnique({ where: { key } });
+  if (!existing) return;
+
+  const ownedByAggregator = callerType === 'aggregator' && existing.aggregatorId === callerId;
+  const ownedByDisco = callerType === 'disco' && existing.discoAdminId === callerId;
+  if (!ownedByAggregator && !ownedByDisco) {
+    throw new ForbiddenException({ success: false, message: 'Idempotency key belongs to a different caller' });
+  }
+
+  throw new HttpException(existing.responseBody as object, existing.responseStatus);
+}
 
   async saveRecordTx(tx: TransactionClient, key: string, callerId: number, callerType: CallerType, status: number, body: object): Promise<void> {
     const expiresAt = new Date();

@@ -5,6 +5,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { TransactionsModule } from './transactions/transactions.module';
 import { RecoveryProcessor } from './queues/recovery.processor';
 import { HealthController } from './health/health.controller';
+import { EventsModule } from './events/events.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { HealthController } from './health/health.controller';
     }),
     PrismaModule,
     TransactionsModule,
+    EventsModule,
   ],
   providers: [RecoveryProcessor],
   controllers: [HealthController],

@@ -9,7 +9,7 @@ import { HealthController } from './health/health.controller';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot({
-      throttlers: [{ ttl: 60000, limit: 100 }], // 100 requests/min per IP — tune once real traffic is known
+      throttlers: [{ ttl: 60000, limit: Number(process.env.THROTTLE_LIMIT ?? 100)  }], // 100 requests/min per IP — tune once real traffic is known
     }),
     ProxyModule,
   ],

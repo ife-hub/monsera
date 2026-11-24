@@ -1,0 +1,274 @@
+{
+    "metrics": {
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 66,
+            "thresholds": {
+                "rate<0.02": false
+            },
+            "value": 0
+        },
+        "http_req_blocked": {
+            "p(90)": 8.513300000000001,
+            "p(95)": 34.1906,
+            "p(99)": 221.55721499999962,
+            "max": 264.3603,
+            "avg": 11.738630303030304,
+            "min": 0,
+            "med": 2.97875
+        },
+        "http_req_duration{scenario:reads}": {
+            "p(95)": 947.6115049999999,
+            "p(99)": 995.084715,
+            "max": 1004.6436,
+            "avg": 666.3742954545453,
+            "min": 580.8108,
+            "med": 627.47315,
+            "p(90)": 724.9152400000002,
+            "thresholds": {
+                "p(95)<800": true
+            }
+        },
+        "vus_max": {
+            "value": 100,
+            "min": 100,
+            "max": 100
+        },
+        "vends_sent": {
+            "count": 222,
+            "rate": 4.915822648704233
+        },
+        "idempotency_violations": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count==0": false
+            }
+        },
+        "debits_approved": {
+            "count": 6,
+            "rate": 0.13286007158660088
+        },
+        "dropped_iterations": {
+            "rate": 0,
+            "count": 0,
+            "thresholds": {
+                "count==0": false
+            }
+        },
+        "http_req_duration{expected_response:true}": {
+            "avg": 3048.3313636363637,
+            "min": 580.8108,
+            "med": 1904.99015,
+            "p(90)": 7069.187599999999,
+            "p(95)": 7998.917874999999,
+            "p(99)": 11237.373899999971,
+            "max": 14470.067
+        },
+        "vus": {
+            "value": 1,
+            "min": 0,
+            "max": 11
+        },
+        "iterations": {
+            "count": 54,
+            "rate": 1.1957406442794078
+        },
+        "http_req_duration": {
+            "avg": 3048.3313636363637,
+            "min": 580.8108,
+            "med": 1904.99015,
+            "p(90)": 7069.187599999999,
+            "p(95)": 7998.917874999999,
+            "p(99)": 11237.373899999971,
+            "max": 14470.067
+        },
+        "http_req_duration{scenario:vend}": {
+            "avg": 3139.967154545455,
+            "min": 687.297,
+            "med": 2711.00495,
+            "p(90)": 5923.02321,
+            "p(95)": 6398.264964999999,
+            "p(99)": 8010.887390999998,
+            "max": 8433.2967,
+            "thresholds": {
+                "p(95)<1000": true
+            }
+        },
+        "iteration_duration": {
+            "max": 17500.8939,
+            "avg": 3324.626642592593,
+            "min": 583.7604,
+            "med": 1473.2345500000001,
+            "p(90)": 8230.774070000003,
+            "p(95)": 12364.099859999991,
+            "p(99)": 16687.039627
+        },
+        "credits_ok": {
+            "count": 6,
+            "rate": 0.13286007158660088
+        },
+        "http_req_duration{scenario:batch}": {
+            "p(99)": 4893.46067,
+            "max": 4932.707,
+            "avg": 2970.3905,
+            "min": 1008.074,
+            "med": 2970.3905,
+            "p(90)": 4540.2437,
+            "p(95)": 4736.47535,
+            "thresholds": {
+                "p(95)<3000": true
+            }
+        },
+        "http_req_connecting": {
+            "avg": 6.52804393939394,
+            "min": 0,
+            "med": 2.7498,
+            "p(90)": 5.5596499999999995,
+            "p(95)": 8.731225,
+            "p(99)": 83.62747499999912,
+            "max": 184.1698
+        },
+        "http_req_duration{scenario:debitcredit}": {
+            "avg": 6381.323608333335,
+            "min": 3029.2584,
+            "med": 5251.0337500000005,
+            "p(90)": 9348.72638,
+            "p(95)": 11734.711299999995,
+            "p(99)": 13922.995860000003,
+            "max": 14470.067,
+            "thresholds": {
+                "p(95)<3000": true
+            }
+        },
+        "http_req_tls_handshaking": {
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "max": 0
+        },
+        "data_received": {
+            "count": 62790,
+            "rate": 1390.3806491537782
+        },
+        "http_reqs": {
+            "count": 66,
+            "rate": 1.4614607874526098
+        },
+        "http_req_waiting": {
+            "p(90)": 7068.2783500000005,
+            "p(95)": 7998.7873,
+            "p(99)": 11237.373899999971,
+            "max": 14470.067,
+            "avg": 3046.506213636364,
+            "min": 579.5746,
+            "med": 1858.19065
+        },
+        "unexpected_responses": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count==0": false
+            }
+        },
+        "http_req_sending": {
+            "avg": 0.1258378787878788,
+            "min": 0,
+            "med": 0,
+            "p(90)": 0.52275,
+            "p(95)": 0.529625,
+            "p(99)": 0.8291899999999978,
+            "max": 1.081
+        },
+        "checks": {
+            "passes": 64,
+            "fails": 0,
+            "value": 1
+        },
+        "obligation_violations": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count==0": false
+            }
+        },
+        "idempotency_race_5xx": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count==0": false
+            }
+        },
+        "data_sent": {
+            "count": 68806,
+            "rate": 1523.59501426461
+        },
+        "http_req_receiving": {
+            "p(90)": 0.80785,
+            "p(95)": 0.9895750000000001,
+            "p(99)": 33.22447499999947,
+            "max": 93.0729,
+            "avg": 1.6993121212121216,
+            "min": 0,
+            "med": 0.15125
+        }
+    },
+    "setup_data": {
+        "adminToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJUeXBlIjoiTU9OU0VSQV9BRE1JTiIsImVtYWlsIjoiYWRtaW5AbW9uc2VyYS5jb20iLCJpYXQiOjE3OTUyNDc5MzAsImV4cCI6MTc5NTMzNDMzMH0.kmFOxz-QgzXvHoSMnice9dTByuUwxYiu7aG5RZX8EkM",
+        "discoToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsInVzZXJUeXBlIjoiRElTQ09fQURNSU4iLCJlbWFpbCI6ImRpc2NvLmFkbWluQGVrZWRwLmNvbSIsImlhdCI6MTc5NTI0NzkyOCwiZXhwIjoxNzk1MzM0MzI4fQ.-UDrLVswzLU06-4JTinPINqOkVQuYw-T-D94xGGh1MM",
+        "runId": "mwq49hob"
+    },
+    "root_group": {
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "meters list: 200": {
+                    "fails": 0,
+                    "name": "meters list: 200",
+                    "path": "::meters list: 200",
+                    "id": "2351de188ba1fcfc70262ac1700c4e29",
+                    "passes": 22
+                },
+                "vend: 201 and accepted": {
+                    "passes": 22,
+                    "fails": 0,
+                    "name": "vend: 201 and accepted",
+                    "path": "::vend: 201 and accepted",
+                    "id": "07288a72d27f3ccf6540d3176292c700"
+                },
+                "debit: 200 or 201": {
+                    "name": "debit: 200 or 201",
+                    "path": "::debit: 200 or 201",
+                    "id": "6a8472a83f2454e7c12d7385d8882b34",
+                    "passes": 6,
+                    "fails": 0
+                },
+                "credit: 201": {
+                    "id": "6794dc023be6ac2a660aaa4da67b8d1c",
+                    "passes": 6,
+                    "fails": 0,
+                    "name": "credit: 201",
+                    "path": "::credit: 201"
+                },
+                "credit: recovered exactly what was paid": {
+                    "id": "744f4b949a6b5873a0a0efc373f15370",
+                    "passes": 6,
+                    "fails": 0,
+                    "name": "credit: recovered exactly what was paid",
+                    "path": "::credit: recovered exactly what was paid"
+                },
+                "batch: 201 and nothing rejected": {
+                    "id": "8c0e353f6388d3bf0d9d0d0432820383",
+                    "passes": 2,
+                    "fails": 0,
+                    "name": "batch: 201 and nothing rejected",
+                    "path": "::batch: 201 and nothing rejected"
+                }
+            },
+        "name": "",
+        "path": ""
+    }
+}

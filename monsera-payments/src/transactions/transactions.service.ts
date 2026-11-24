@@ -211,15 +211,24 @@ try {
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT id FROM "DiscoAdmins" WHERE id = ${discoAdmin.id} FOR UPDATE`;
+        await this.idempotency.checkIdempotency(idempotencyKey, callerId, callerType, tx);
         const walletA = await tx.wallet.findUnique({ where: { id: walletAId } });
         const walletABalanceKobo = Math.round(Number(walletA?.balance ?? 0) * 100);
         if (walletABalanceKobo < calcResult.disbursedKobo) throw new Error('INSUFFICIENT_WALLET_A_BALANCE');
 
-        if (!customer) {
-          customer = await tx.customer.create({
-            data: { meterToken: dto.meterToken, lastInteraction: new Date(), riskLevel: 'low', outstanding: new Prisma.Decimal(0), status: 'active', state: 'active', band: 'B', dateAdded: new Date() },
-          });
-        }
+        const txCustomer = await tx.customer.upsert({
+          where: { meterToken: dto.meterToken },
+          update: {},
+          create: { meterToken: dto.meterToken, lastInteraction: new Date(), riskLevel: 'low', outstanding: new Prisma.Decimal(0), status: 'active', state: 'active', band: 'B', dateAdded: new Date() },
+        });
+        customer = txCustomer; // the rest of the transaction keeps using `customer!`
+
+        // The earlier obligation check ran before we held the lock, so re-check it here.
+        const openObligation = await tx.obligation.findFirst({
+          where: { customerId: txCustomer.id, status: { in: ['Current', 'Watch', 'Delayed', 'Default'] }, remainingKobo: { gt: 0 } },
+          select: { id: true },
+        });
+        if (openObligation) throw new Error('OPEN_OBLIGATION_EXISTS');
 
         const updatedCustomer = await tx.customer.update({
           where: { id: customer!.id },
@@ -289,6 +298,9 @@ try {
     } catch (error: any) {
       if (error.message === 'INSUFFICIENT_WALLET_A_BALANCE') {
         return { success: true, decision: 'declined', reason: 'Credit wallet exhausted. New advances temporarily unavailable.' };
+      }
+      if (error.message === 'OPEN_OBLIGATION_EXISTS') {
+        return { success: true, decision: 'declined', reason: 'Meter already has an outstanding obligation', requestedKobo: calcResult.obligationKobo };
       }
       throw error; // P2002 and anything else go to the global filter
     }

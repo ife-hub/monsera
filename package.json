@@ -3,7 +3,7 @@
   "name": "monsera-dev",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n gateway,payments,auth,vend,admin \"npm --prefix ./monsera-gateway run start:dev\" \"npm --prefix ./monsera-payments run start:dev\" \"npm --prefix ./monsera-users-admin run start:dev\" \"npm --prefix ./monsera-vend-ingestion run start:dev\" \"npm --prefix ./monsera-admin run start:dev\""
+    "dev": "concurrently -n gateway,payments,auth,vend,admin \"npm --prefix ./monsera-gateway run start:dev\" \"npm --prefix ./monsera-payments run start:dev\" \"npm --prefix ./monsera-users-admin run start:dev\" \"npm --prefix ./monsera-vend-ingestion run start:dev\" \"npm --prefix ./monsera-admin run start:dev\" \"npm --prefix ./monsera-notifications run start:dev\""
   },
   "devDependencies": {
     "concurrently": "^9.0.0"
