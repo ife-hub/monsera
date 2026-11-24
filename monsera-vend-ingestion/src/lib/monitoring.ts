@@ -8,12 +8,16 @@
  *    for critical) for exceptions and for messages at warning level or above.
  *    Notifications rate-limits repeats per alert title.
  */
-import { Logger } from '@nestjs/common';
 
 type Level = 'fatal' | 'error' | 'warning' | 'log' | 'info' | 'debug';
 type Context = { level?: Level; tags?: Record<string, unknown>; extra?: Record<string, unknown>; [k: string]: unknown };
 
-const logger = new Logger('Monitoring');
+// Plain console (no framework import), so this loads in jobs, scripts and tests alike.
+const logger = {
+  log: (line: string) => console.log(`[Monitoring] ${line}`),
+  warn: (line: string) => console.warn(`[Monitoring] ${line}`),
+  error: (line: string, stack?: string) => console.error(`[Monitoring] ${line}${stack ? `\n${stack}` : ''}`),
+};
 const SERVICE = process.env.SERVICE_NAME ?? 'monsera';
 
 let sentry: any = null;
