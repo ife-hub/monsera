@@ -5,6 +5,7 @@ import { authenticate, AuthenticatedRequest, authorize } from '../../../middlewa
 import { Prisma, UserType } from '@prisma/client';
 import { getCorsHeaders, handleOptions } from '../../../lib/cors';
 import { adjustWallet, nairaToKobo, InsufficientWalletBalanceError, WALLET_A_ID, WALLET_C_ID } from '../../../lib/wallets';
+import { rebalanceWalletAQuietly } from '../../../lib/wallet-a';
 
 export function OPTIONS(request: Request) {
   return handleOptions(request);
@@ -208,6 +209,8 @@ async function postHandler(request: AuthenticatedRequest) {
         return { floatLedger, wallet: walletA };
       });
 
+      // New float on Wallet A: spread it over the sub-wallets (lib/wallet-a.ts).
+      await rebalanceWalletAQuietly();
       return NextResponse.json({ success: true, data: result }, { status: 201, headers });
     }
 

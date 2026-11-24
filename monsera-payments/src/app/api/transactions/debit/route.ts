@@ -9,7 +9,8 @@ import { getActiveCreditParameters } from '../../../../lib/credit-parameters';
 import { checkIdempotency, saveIdempotencyRecordTx } from '../../../../lib/idempotency';
 import { handleOptions, getCorsHeaders } from '../../../../lib/cors';
 import { isEnabled } from '../../../../lib/feature-flags';
-import { adjustWallet, WALLET_A_ID, InsufficientWalletBalanceError } from '../../../../lib/wallets';
+import { InsufficientWalletBalanceError } from '../../../../lib/wallets';
+import { debitWalletA, walletABalanceKobo } from '../../../../lib/wallet-a';
 import { isInCohort } from '../../../../lib/cohort';
 import { recordDecision, type DecisionRecord } from '../../../../lib/decision-log';
 import { computeWindows } from '../../../../lib/recovery-window';
@@ -401,14 +402,16 @@ async function debitHandler(request: AuthenticatedRequest) {
             },
           });
         }
-        // §3.3/§7.2: Wallet A locked and re-checked; never negative. §3.6: only
-        // the disbursed (token) value leaves Wallet A; Wallet B is untouched.
-        const { newBalanceKobo } = await adjustWallet(
-          tx, WALLET_A_ID(), -calc.disbursedKobo, 'disbursement',
+        // §3.3/§7.2: taken from a Wallet A row that can cover it, checked under
+        // its lock; never negative. §3.6: only the disbursed (token) value
+        // leaves Wallet A; Wallet B is untouched. Wallet A is split into
+        // sub-wallets so several advances can commit at once (lib/wallet-a.ts).
+        const { newBalanceKobo } = await debitWalletA(
+          tx, calc.disbursedKobo, 'disbursement',
           `Disbursement for meter ${meterToken}: ${calc.disbursedKobo} kobo`, transactionId
         );
 
-        return { transaction, obligation, updatedCustomer, updatedDiscoAdmin, newWalletABalanceKobo: newBalanceKobo };
+        return { transaction, obligation, updatedCustomer, updatedDiscoAdmin, rowBalanceKobo: newBalanceKobo };
       }, MONEY_TX_OPTIONS);
     } catch (txError: any) {
       // Declined inside the transaction (it rolled back, nothing was
@@ -434,9 +437,13 @@ async function debitHandler(request: AuthenticatedRequest) {
     }
 
     // §7.2: configurable low-balance threshold raises an alert.
+    // Wallet A's balance is the sum of its rows. Every row being below the
+    // threshold is necessary for the total to be, so the (cheap) total is
+    // only read when the row this advance used is low.
     const lowBalanceThreshold = Number(process.env.LOW_WALLET_A_BALANCE_KOBO ?? '5000000');
-    if (result.newWalletABalanceKobo < lowBalanceThreshold) {
-      const message = `ALERT: Wallet A balance low. Remaining: ${result.newWalletABalanceKobo} kobo. Top up required.`;
+    const walletAKobo = result.rowBalanceKobo < lowBalanceThreshold ? await walletABalanceKobo() : Infinity;
+    if (walletAKobo < lowBalanceThreshold) {
+      const message = `ALERT: Wallet A balance low. Remaining: ${walletAKobo} kobo. Top up required.`;
       Sentry.captureMessage(message, { level: 'warning', tags: { type: 'low_wallet_a_balance' } });
       await prisma.audit.create({ data: { employeeName: 'System', emailAddress: 'system@monsera.com', activity: message } });
     }

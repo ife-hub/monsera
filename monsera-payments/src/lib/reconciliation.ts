@@ -3,17 +3,20 @@
  * monthly job and the settlement gate. All amounts are integer kobo; sums
  * are done in Postgres (BIGINT) and converted once.
  */
+import { Prisma } from '@prisma/client';
 import prisma from './prisma';
-import { WALLET_A_ID, WALLET_B_ID, FUNDING_TYPES, COMMISSION_PAYOUT_TYPE, PRINCIPAL_RETURN_TYPE } from './wallets';
+import { WALLET_B_ID, FUNDING_TYPES, COMMISSION_PAYOUT_TYPE, PRINCIPAL_RETURN_TYPE } from './wallets';
+import { walletAIds, walletABalanceKobo } from './wallet-a';
 
 const n = (v: unknown) => Number(v ?? 0);
 
 /** Σ ledger rows for a wallet, optionally restricted to types and/or a time window [from, to). */
-async function ledgerSum(walletId: number, opts: { types?: readonly string[]; from?: Date; to?: Date } = {}) {
+/** Sum of ledger rows for a wallet, or for several (Wallet A is all its rows: lib/wallet-a.ts). */
+async function ledgerSum(walletId: number | number[], opts: { types?: readonly string[]; from?: Date; to?: Date } = {}) {
   const agg = await prisma.walletTransaction.aggregate({
     _sum: { amountKobo: true },
     where: {
-      walletId,
+      walletId: Array.isArray(walletId) ? { in: walletId } : walletId,
       ...(opts.types ? { type: { in: [...opts.types] } } : {}),
       ...(opts.from || opts.to ? { createdAt: { ...(opts.from && { gte: opts.from }), ...(opts.to && { lt: opts.to }) } } : {}),
     },
@@ -74,18 +77,17 @@ export interface IdentityResult {
  * rebuilt from the ledger up to that instant (used at the monthly cut).
  */
 export async function controllingIdentity(asOf?: Date): Promise<IdentityResult> {
-  const A = WALLET_A_ID();
+  // Wallet A = Wallet A and its sub-wallets; 'rebalance' rows between them net to zero.
+  const A = await walletAIds();
   const B = WALLET_B_ID();
   const before = asOf ? { to: asOf } : {};
 
   const [walletAKobo, walletBKobo] = asOf
     ? await Promise.all([ledgerSum(A, before), ledgerSum(B, before)])
-    : await Promise.all(
-        [A, B].map(async (id) => {
-          const w = await prisma.wallet.findUnique({ where: { id }, select: { balance: true } });
-          return Math.round(Number(w?.balance ?? 0) * 100);
-        })
-      );
+    : await Promise.all([
+        walletABalanceKobo(),
+        prisma.wallet.findUnique({ where: { id: B }, select: { balance: true } }).then((w) => Math.round(Number(w?.balance ?? 0) * 100)),
+      ]);
 
   const [outstandingObligationsKobo, fundingA, fundingB, commissionPaidOutNeg, serviceAgg] = await Promise.all([
     outstandingAt(asOf),
@@ -141,7 +143,7 @@ export interface DailyVerification {
  *    (the content of the daily transaction file).
  */
 export async function dailyVerification(start: Date, end: Date): Promise<DailyVerification> {
-  const A = WALLET_A_ID();
+  const A = await walletAIds();
   const B = WALLET_B_ID();
 
   const [unmatchedObligations, unmatchedRecoveries, unbackedWalletB, issued, recovered, swept, created, settled] = await Promise.all([
@@ -151,7 +153,7 @@ export async function dailyVerification(start: Date, end: Date): Promise<DailyVe
        WHERE o."createdAt" >= ${start} AND o."createdAt" < ${end}
          AND NOT EXISTS (
            SELECT 1 FROM "WalletTransaction" w
-            WHERE w."walletId" = ${A} AND w.type = 'disbursement'
+            WHERE w."walletId" IN (${Prisma.join(A)}) AND w.type = 'disbursement'
               AND w."referenceId" = t."transactionId" AND w."amountKobo" = -o."disbursedKobo")`,
     prisma.$queryRaw<{ id: number }[]>`
       SELECT r.id FROM "ObligationRecovery" r
@@ -170,7 +172,7 @@ export async function dailyVerification(start: Date, end: Date): Promise<DailyVe
       where: { transactionType: 'debit', date: { gte: start, lt: end } },
     }),
     prisma.obligationRecovery.aggregate({ _count: true, _sum: { amountKobo: true }, where: { createdAt: { gte: start, lt: end } } }),
-    prisma.walletTransaction.aggregate({ _count: true, _sum: { amountKobo: true }, where: { walletId: A, type: 'sweep', createdAt: { gte: start, lt: end } } }),
+    prisma.walletTransaction.aggregate({ _count: true, _sum: { amountKobo: true }, where: { walletId: { in: A }, type: 'sweep', createdAt: { gte: start, lt: end } } }),
     prisma.obligation.count({ where: { createdAt: { gte: start, lt: end } } }),
     prisma.obligationRecovery.count({ where: { createdAt: { gte: start, lt: end } } }),
   ]);
@@ -218,7 +220,7 @@ const check = (check: string, rule: string, values: Record<string, number>, expe
  * shows up as a difference (zero tolerance throughout).
  */
 export async function monthlyChecks(start: Date, end: Date): Promise<MonthlyCheck[]> {
-  const A = WALLET_A_ID();
+  const A = await walletAIds();
   const B = WALLET_B_ID();
   const win = { from: start, to: end };
 

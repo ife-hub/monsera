@@ -1,3 +1,6 @@
+import { Prisma } from '@prisma/client';
+import { WALLET_A_ID } from '../../../../lib/wallets';
+import { walletABalanceKobo } from '../../../../lib/wallet-a';
 import {NextRequest, NextResponse} from '../../../../lib/next-server';
 import { getRouteId } from '../../../../lib/route-params';
 import prisma from '../../../../lib/prisma';
@@ -24,7 +27,16 @@ async function getHandler(request: AuthenticatedRequest, context: { params: Prom
         )
     }
     try {
-        const data = await prisma.wallet.findUnique({where: { id }});
+        const row = await prisma.wallet.findUnique({ where: { id } });
+        // Wallet A is Wallet A plus its sub-wallets (lib/wallet-a.ts): show the total.
+        const data =
+          row && id === WALLET_A_ID()
+            ? await (async () => {
+                const subWallets = await prisma.wallet.findMany({ where: { parentWalletId: id }, select: { id: true, balance: true }, orderBy: { id: 'asc' } });
+                const totalKobo = await walletABalanceKobo();
+                return { ...row, balance: new Prisma.Decimal(totalKobo).div(100), ownBalance: row.balance, subWallets };
+              })()
+            : row;
         if (!data) {
             return NextResponse.json(
                 {

@@ -47,7 +47,7 @@ import prisma from '@/lib/prisma';
 import * as Sentry from '@sentry/nextjs';
 import { checkIdempotency, saveIdempotencyRecordTx } from '@/lib/idempotency';
 import { POST as debitPost } from '@/app/api/transactions/debit/route';
-import { isAdjustWalletSql, fakeAdjustWallet } from '../helpers/wallet-sql';
+import { isAdjustWalletSql, fakeAdjustWallet, isDebitWalletASql, fakeDebitWalletA, isWalletATotalSql, walletATotalRows } from '../helpers/wallet-sql';
 
 const mockPrisma = prisma as any;
 const mockCheckIdempotency = checkIdempotency as jest.Mock;
@@ -86,13 +86,17 @@ function makeTxMock(overrides: Record<string, any> = {}, { walletBalanceNaira = 
   const customer = { id: 100, meterToken: 'MT-001', outstanding: 0, band: 'B', status: 'active' };
 
   const balances: Record<number, number> = { 1: walletA.balance };
+  mockPrisma.$queryRaw = jest.fn(async (strings: TemplateStringsArray) => (isWalletATotalSql(strings) ? walletATotalRows(balances) : []));
   const tx: any = {
     $executeRaw: jest.fn().mockResolvedValue(undefined),
+    $executeRawUnsafe: jest.fn().mockResolvedValue(undefined), // savepoints around Wallet A attempts
     // Row locks: lockWallet reads the locked Wallet A balance; the debit
     // handler then locks the customer row by meterToken.
     $queryRaw: jest.fn().mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join('?');
       if (isAdjustWalletSql(strings)) return fakeAdjustWallet(tx, balances, values);
+      if (isDebitWalletASql(strings)) return fakeDebitWalletA(tx, balances, values);
+      if (isWalletATotalSql(strings)) return walletATotalRows(balances);
       if (sql.includes('"Wallet"')) return [{ balance: balances[1] }];
       if (sql.includes('"Customers"')) return [{ id: customer.id }];
       return [];

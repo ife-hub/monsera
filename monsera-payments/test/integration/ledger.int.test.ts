@@ -34,7 +34,7 @@ suite('ledger lifecycle on a real database', () => {
   // Loaded lazily so DATABASE_URL is set before the Prisma client is created.
   let prisma: any;
   let debit: any, credit: any, suspensions: any;
-  let runDailySweep: any, controllingIdentity: any, dailyVerification: any, monthlyChecks: any;
+  let runDailySweep: any, controllingIdentity: any, dailyVerification: any, monthlyChecks: any, walletABalanceKobo: any;
   let token: string;
   const windowStart = new Date(Date.now() - 60_000);
 
@@ -68,6 +68,11 @@ suite('ledger lifecycle on a real database', () => {
     await prisma.discoAdmin.create({ data: { name: 'Ikeja Electric', mail: 'ie@test', status: 'active', apiKey: 'ie-key', balance: 0, outstanding: 0, lastInteraction: new Date() } });
     await prisma.wallet.createMany({ data: [{ id: 1, walletType: 'A', balance: 100000 }, { id: 2, walletType: 'B', balance: 0 }, { id: 3, walletType: 'C', balance: 0 }] });
     await prisma.walletTransaction.create({ data: { walletId: 1, type: 'opening-balance', amountKobo: 10_000_000, description: 'test float' } });
+    // The whole lifecycle runs with Wallet A split into sub-wallets (lib/wallet-a.ts).
+    ({ walletABalanceKobo } = await import('@/lib/wallet-a'));
+    const { ensureWalletASubWallets, rebalanceWalletA } = await import('@/lib/wallet-a');
+    expect(await ensureWalletASubWallets()).toHaveLength(8);
+    await rebalanceWalletA();
     await prisma.cohortMeter.createMany({ data: ['M-2K', 'M-4K', 'M-7K', 'M-TIER'].map((meterToken) => ({ meterToken })) });
     await prisma.customer.create({ data: { meterToken: 'M-4K', band: 'A', riskLevel: 'low', outstanding: 0, status: 'active', state: 'active', lastInteraction: new Date(), dateAdded: new Date() } });
 
@@ -123,8 +128,8 @@ suite('ledger lifecycle on a real database', () => {
   });
 
   it('§3.6: only the disbursed value leaves Wallet A; Wallet B receives nothing at disbursement', async () => {
-    const [a, b] = await Promise.all([prisma.wallet.findUnique({ where: { id: 1 } }), prisma.wallet.findUnique({ where: { id: 2 } })]);
-    expect(Math.round(Number(a.balance) * 100)).toBe(10_000_000 - 181818 - 363636 - 636363);
+    const [aKobo, b] = await Promise.all([walletABalanceKobo(), prisma.wallet.findUnique({ where: { id: 2 } })]);
+    expect(aKobo).toBe(10_000_000 - 181818 - 363636 - 636363); // Wallet A = all its rows
     expect(Number(b.balance)).toBe(0);
   });
 
@@ -189,11 +194,12 @@ suite('ledger lifecycle on a real database', () => {
 
   it('criterion 3: declines (HTTP 200) rather than overdrawing Wallet A, and Wallet A never goes negative', async () => {
     await prisma.cohortMeter.create({ data: { meterToken: 'M-BIG' } });
-    await prisma.$executeRaw`UPDATE "Wallet" SET balance = 100 WHERE id = 1`; // ₦100 left (direct edit, for the test only)
+    // ₦100 left in Wallet A in total (direct edit of every Wallet A row, for the test only)
+    await prisma.$executeRaw`UPDATE "Wallet" SET balance = CASE WHEN id = 1 THEN 100 ELSE 0 END WHERE id = 1 OR "parentWalletId" = 1`;
     const res = await advance('M-BIG', 2000);
     expect(res.status).toBe(200);
     expect((await res.json()).reason).toMatch(/Credit wallet exhausted/);
-    expect(Number((await prisma.wallet.findUnique({ where: { id: 1 } })).balance)).toBe(100);
+    expect(await walletABalanceKobo()).toBe(10_000);
     const lastDecision = await prisma.decisionLog.findFirst({ orderBy: { id: 'desc' } });
     expect(lastDecision).toMatchObject({ meterToken: 'M-BIG', decision: 'declined' });
   });
