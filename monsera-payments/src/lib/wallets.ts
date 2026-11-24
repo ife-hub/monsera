@@ -39,9 +39,18 @@ export async function lockWallet(tx: Tx, walletId: number): Promise<number> {
 /**
  * Atomically moves a wallet balance by `deltaKobo` (negative = debit) and
  * writes the matching WalletTransaction ledger row. Must be called inside
- * prisma.$transaction. The row is locked first, so concurrent callers
- * serialise instead of overwriting each other; a debit that would take the
- * balance below zero throws InsufficientWalletBalanceError.
+ * prisma.$transaction. A debit that would take the balance below zero
+ * throws InsufficientWalletBalanceError and changes nothing.
+ *
+ * One SQL statement does the check, the move and the ledger row. The UPDATE
+ * takes the wallet's row lock and holds it until the surrounding transaction
+ * commits, so concurrent callers queue on it; Postgres re-checks the
+ * "stays at or above zero" condition against the latest balance once the
+ * lock is granted, so a balance can never go negative. Doing it in one
+ * round trip (it used to be three: lock-and-read, update, insert) keeps the
+ * lock held for as short a time as possible: every approved advance takes
+ * Wallet A's lock, so this is what limits how many advances per second the
+ * platform can disburse.
  *
  * Balances are stored in naira (Decimal); the delta is applied as an
  * increment, never as a read-modify-write of the absolute value.
@@ -57,24 +66,58 @@ export async function adjustWallet(
   if (!Number.isInteger(deltaKobo) || deltaKobo === 0) {
     throw new Error(`Wallet adjustment must be a non-zero integer kobo amount, got ${deltaKobo}`);
   }
-  const balanceKobo = await lockWallet(tx, walletId);
-  if (deltaKobo < 0 && balanceKobo + deltaKobo < 0) {
+
+  const rows = await tx.$queryRaw<AdjustedRow[]>`
+    WITH updated AS (
+      UPDATE "Wallet"
+      SET balance = COALESCE(balance, 0) + ${deltaKobo}::numeric / 100, "updatedAt" = now()
+      WHERE id = ${walletId}
+        AND (${deltaKobo}::bigint >= 0 OR COALESCE(balance, 0) * 100 + ${deltaKobo}::bigint >= 0)
+      RETURNING id, "walletType", balance, "createdAt", "updatedAt"
+    ), record AS (
+      INSERT INTO "WalletTransaction" ("walletId", type, "amountKobo", description, "referenceId")
+      SELECT id, ${type}, ${deltaKobo}::int, ${description}, ${referenceId ?? null} FROM updated
+      RETURNING id, "walletId", type, "amountKobo", description, "referenceId", "createdAt"
+    )
+    SELECT u.id, u."walletType", u.balance, u."createdAt", u."updatedAt",
+           r.id AS "recordId", r.type AS "recordType", r."amountKobo" AS "recordAmountKobo",
+           r.description AS "recordDescription", r."referenceId" AS "recordReferenceId", r."createdAt" AS "recordCreatedAt"
+    FROM updated u, record r`;
+
+  if (rows.length === 0) {
+    // Nothing moved: the wallet is missing, or the debit would overdraw it.
+    // (Rare path, so the extra read only happens here.)
+    const balanceKobo = await lockWallet(tx, walletId); // throws "not found"
     throw new InsufficientWalletBalanceError(walletId, balanceKobo, -deltaKobo);
   }
 
-  const wallet = await tx.wallet.update({
-    where: { id: walletId },
-    data: {
-      balance: { increment: new Prisma.Decimal(deltaKobo).div(100) },
-      updatedAt: new Date(),
-    },
-  });
+  const row = rows[0];
+  const wallet = { id: row.id, walletType: row.walletType, balance: row.balance, createdAt: row.createdAt, updatedAt: row.updatedAt };
+  const record = {
+    id: row.recordId,
+    walletId: row.id,
+    type: row.recordType,
+    amountKobo: row.recordAmountKobo,
+    description: row.recordDescription,
+    referenceId: row.recordReferenceId,
+    createdAt: row.recordCreatedAt,
+  };
+  const newBalanceKobo = Math.round(Number(row.balance ?? 0) * 100);
+  return { wallet, record, previousBalanceKobo: newBalanceKobo - deltaKobo, newBalanceKobo };
+}
 
-  const record = await tx.walletTransaction.create({
-    data: { walletId, type, amountKobo: deltaKobo, description, referenceId: referenceId ?? null },
-  });
-
-  return { wallet, record, previousBalanceKobo: balanceKobo, newBalanceKobo: balanceKobo + deltaKobo };
+interface AdjustedRow {
+  id: number;
+  walletType: string;
+  balance: Prisma.Decimal | null;
+  createdAt: Date;
+  updatedAt: Date;
+  recordId: number;
+  recordType: string;
+  recordAmountKobo: number;
+  recordDescription: string;
+  recordReferenceId: string | null;
+  recordCreatedAt: Date;
 }
 
 /** Parses a naira amount (number or numeric string, max 2 dp) into positive integer kobo, or null. */

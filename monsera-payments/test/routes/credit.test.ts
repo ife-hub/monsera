@@ -45,6 +45,7 @@ import * as Sentry from '@sentry/nextjs';
 import { checkIdempotency, saveIdempotencyRecordTx } from '@/lib/idempotency';
 import { recoveryQueue } from '@/lib/queues';
 import { POST as creditPost } from '@/app/api/transactions/credit/route'; // adjust path
+import { isAdjustWalletSql, fakeAdjustWallet } from '../helpers/wallet-sql';
 
 const mockPrisma = prisma as any;
 const mockCheckIdempotency = checkIdempotency as jest.Mock;
@@ -105,10 +106,13 @@ function makeTxMock({
   outstandingObligations?: any[];
   discoAdmin?: any;
 } = {}) {
-  return {
+  const balances: Record<number, number> = { 2: 0 };
+  const tx: any = {
     $executeRaw: jest.fn().mockResolvedValue(undefined),
-    // lockWallet (lib/wallets) reads the locked Wallet B balance via $queryRaw
-    $queryRaw: jest.fn().mockResolvedValue([{ balance: 0 }]),
+    // adjustWallet (lib/wallets) credits Wallet B in one statement.
+    $queryRaw: jest.fn().mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) =>
+      isAdjustWalletSql(strings) ? fakeAdjustWallet(tx, balances, values) : [{ balance: balances[2] }]
+    ),
     obligation: {
       findMany: jest.fn().mockResolvedValue(outstandingObligations),
       update: jest.fn().mockResolvedValue({}),
@@ -126,6 +130,7 @@ function makeTxMock({
     monseraEarnings: { create: jest.fn().mockResolvedValue({ id: 1, amount: 200 }) },
     audit: { create: jest.fn().mockResolvedValue({}) },
   };
+  return tx;
 }
 
 beforeEach(() => {
