@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SERVICES = ['monsera-payments', 'monsera-vend-ingestion', 'monsera-users-admin', 'monsera-admin'];
+const SERVICES = ['monsera-payments', 'monsera-vend-ingestion', 'monsera-users-admin', 'monsera-admin', 'stress'];
 const HEADER = '// GENERATED COPY of db/schema.prisma. Do not edit here: edit db/schema.prisma, then run `npm run schema:sync` at the repo root.\n';
 const source = HEADER + fs.readFileSync(path.join(ROOT, 'db', 'schema.prisma'), 'utf8');
 const check = process.argv.includes('--check');

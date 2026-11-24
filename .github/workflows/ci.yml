@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  schema:
+    name: Schema copies match db/schema.prisma
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.15.0 }
+      - run: node scripts/sync-schema.mjs --check
+      - run: npm ci && npx prisma validate --schema schema.prisma
+        working-directory: db
+        env: { DATABASE_URL: postgresql://ci@localhost/ci }
+
+  service:
+    name: ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [monsera-gateway, monsera-payments, monsera-users-admin, monsera-vend-ingestion, monsera-admin, monsera-notifications]
+    defaults:
+      run:
+        working-directory: ${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.15.0
+          cache: npm
+          cache-dependency-path: ${{ matrix.service }}/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  ledger-integration:
+    name: Ledger integration test (real Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: monsera, POSTGRES_PASSWORD: monsera, POSTGRES_DB: monsera_test }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql://monsera:monsera@localhost:5432/monsera_test
+      DATABASE_URL: postgresql://monsera:monsera@localhost:5432/monsera_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.15.0 }
+      - run: npm ci && npx prisma migrate deploy --schema schema.prisma
+        working-directory: db
+      - run: npm ci && npm run test:integration
+        working-directory: monsera-payments
+
+  images:
+    name: Docker image ${{ matrix.context }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        context: [db, monsera-gateway, monsera-payments, monsera-users-admin, monsera-vend-ingestion, monsera-admin, monsera-notifications]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t ${{ matrix.context }}:ci ${{ matrix.context }}

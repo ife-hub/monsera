@@ -15,6 +15,7 @@ export const SERVICE_URL_ENV: Record<ServiceName, string> = {
 const PREFIXES: Array<[string, ServiceName]> = [
   ['/api/transactions', 'payments'],
   ['/api/wallet', 'payments'],
+  ['/api/float-ledger', 'payments'],
   ['/api/burn-rates', 'payments'],
   ['/api/cohort', 'payments'],
   ['/api/credit-parameters', 'payments'],

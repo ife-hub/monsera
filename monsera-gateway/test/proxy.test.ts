@@ -53,7 +53,8 @@ describe('routing table', () => {
     ['/api/auth/login', 'users-admin'],
     ['/api/users/4', 'users-admin'],
     ['/api/aggregators?page=2', 'admin'],
-    ['/api/float-ledger/9', 'admin'],
+    ['/api/float-ledger/9', 'payments'],
+    ['/api/discos/9', 'admin'],
     ['/api/transactionsX', 'admin'],
   ])('%s -> %s', (path, service) => expect(serviceFor(path)).toBe(service));
 

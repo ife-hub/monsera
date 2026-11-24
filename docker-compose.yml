@@ -1,0 +1,89 @@
+# The whole Monsera platform on one machine: Postgres, Redis, the migration
+# job, the six services and a mock scoring engine.
+#
+#   cp .env.example .env        (then edit secrets)
+#   docker compose up --build
+#
+# Only the gateway is published (http://localhost:3000); the services talk
+# to each other on the compose network, as they would on a private network
+# in production.
+name: monsera
+
+x-db-service: &db-service
+  restart: unless-stopped
+  env_file: .env
+  depends_on:
+    migrate: { condition: service_completed_successfully }
+    redis: { condition: service_healthy }
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: monsera
+      POSTGRES_PASSWORD: monsera
+      POSTGRES_DB: monsera
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monsera"]
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+  migrate:
+    build: ./db
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  payments:
+    <<: *db-service
+    build: ./monsera-payments
+    environment: { SERVICE_NAME: payments, PORT: "3001" }
+
+  users-admin:
+    <<: *db-service
+    build: ./monsera-users-admin
+    environment: { SERVICE_NAME: users-admin, PORT: "3002" }
+
+  vend-ingestion:
+    <<: *db-service
+    build: ./monsera-vend-ingestion
+    environment: { SERVICE_NAME: vend-ingestion, PORT: "3003" }
+
+  admin:
+    <<: *db-service
+    build: ./monsera-admin
+    environment: { SERVICE_NAME: admin, PORT: "3004" }
+
+  notifications:
+    build: ./monsera-notifications
+    restart: unless-stopped
+    env_file: .env
+    environment: { PORT: "3005" }
+    depends_on:
+      redis: { condition: service_healthy }
+
+  gateway:
+    build: ./monsera-gateway
+    restart: unless-stopped
+    env_file: .env
+    environment: { PORT: "3000" }
+    ports: ["3000:3000"]
+    depends_on: [payments, users-admin, vend-ingestion, admin]
+
+  # Stand-in for the external scoring engine (approves ~95% up to ₦7,000).
+  # Point SCORING_ENGINE_URL at the real engine to use it instead.
+  mock-scoring:
+    image: node:22.15.0-slim
+    volumes: ["./stress/mock-scoring-engine.js:/app/mock-scoring-engine.js:ro"]
+    command: ["node", "/app/mock-scoring-engine.js", "4001"]
+
+volumes:
+  pgdata:
