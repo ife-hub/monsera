@@ -1,0 +1,603 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int          @id @default(autoincrement())
+  email        String       @unique
+  passwordHash String
+  name         String
+  userType     UserType
+  isActive     Boolean      @default(true)
+  passwordChangedAt DateTime? // tokens issued before this are rejected (logs out other sessions)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  aggregator   Aggregator?
+  discoAdmin   DiscoAdmin?
+  auditLogs    Audit[]
+  employee     Employee?
+  systemAdmin  SystemAdmin?
+  FinanceHouse FinanceHouse?
+}
+
+model SystemAdmin {
+  id          Int       @id @default(autoincrement())
+  userId      Int       @unique
+  adminType   AdminType
+  permissions Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Transactions {
+  id                Int        @id @default(autoincrement())
+  date              DateTime
+  transactionId     String     @unique
+  branch            String     // meterToken — pseudonymised identifier from DisCo
+  amount            Decimal    // DEPRECATED: use obligationKobo / disbursedKobo / serviceKobo
+
+  obligationKobo    Int?       // full amount customer must repay (naira * 100)
+  disbursedKobo     Int?       // tokens issued = floor(obligation * 10000 / (10000 + rateBps))
+  serviceKobo       Int?       // service charge = obligationKobo - disbursedKobo
+  rateBps           Int?       // rate at transaction time e.g. 1000 = 10%. Persisted, never retroactively altered.
+
+  transactionType   String
+  transactionStatus String
+  paymentStatus     String
+  customerId        Int
+  aggregatorId      Int?
+  discoAdminId      Int
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @default(now())
+  aggregator        Aggregator? @relation(fields: [aggregatorId], references: [id])
+  discoAdmin        DiscoAdmin  @relation(fields: [discoAdminId], references: [id])
+  customer          Customer    @relation(fields: [customerId], references: [id])
+  obligations       Obligation[]
+  monseraEarnings   MonseraEarnings[]
+
+  @@index([customerId, aggregatorId, paymentStatus])
+  @@index([transactionType, transactionStatus, paymentStatus])
+}
+
+model Obligation {
+  id                  Int                   @id @default(autoincrement())
+  transactionId       Int                   // links to the originating debit transaction
+  transaction         Transactions          @relation(fields: [transactionId], references: [id])
+  meterToken          String                // pseudonymised meter identifier
+  customerId          Int
+  customer            Customer              @relation(fields: [customerId], references: [id])
+  discoAdminId        Int
+  discoAdmin          DiscoAdmin            @relation(fields: [discoAdminId], references: [id])
+
+  // Amounts — all integer kobo
+  obligationKobo      Int                   // original full obligation
+  disbursedKobo       Int                   // tokens issued at disbursement
+  serviceKobo         Int                   // service charge component
+  remainingKobo       Int                   // decrements on partial recovery; 0 = fully discharged
+  rateBps             Int                   // rate at disbursement time
+
+  status              ObligationStatus      @default(Current)
+  band                TariffBand            // A, B, or C — determines daily burn rate
+  disbursementDate    DateTime              // start of elapsed clock
+  expectedRecoveryDate DateTime             // computed at disbursement
+  watchDate           DateTime              // threshold for Watch status
+  delayedDate         DateTime              // threshold for Delayed status
+  defaultDate         DateTime              // threshold for Default status
+
+  windowParameterVersion String?           // RecoveryWindowParameters.version used to compute the dates above
+  clockSuspended      Boolean               @default(false)
+  suspendedDays       Int                   @default(0) // accumulated suspended days
+
+  // Recovery tracking
+  recoveredKobo       Int                   @default(0)
+  principalRecoveredKobo Int               @default(0)
+  serviceRecoveredKobo   Int               @default(0)
+
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @default(now())
+  suspensions         ObligationSuspension[]
+  recoveries          ObligationRecovery[]
+
+  @@index([meterToken, status])
+  @@index([customerId, status])
+  @@index([status, defaultDate])
+}
+
+model ObligationSuspension {
+  id            Int         @id @default(autoincrement())
+  obligationId  Int
+  obligation    Obligation  @relation(fields: [obligationId], references: [id])
+  reason        String      // meter disconnected | ring-fence released | dispute | system unavailable
+  startedAt     DateTime
+  endedAt       DateTime?   // null = suspension still active
+  createdAt     DateTime    @default(now())
+}
+
+model ObligationRecovery {
+  id                    Int         @id @default(autoincrement())
+  obligationId          Int
+  obligation            Obligation  @relation(fields: [obligationId], references: [id])
+  recoveryTransactionId Int         // links to the credit/repayment transaction
+  amountKobo            Int         // total recovered in this event
+  principalKobo         Int         // principal component
+  serviceKobo           Int         // service charge component
+  walletBRecordId       Int?        // links to WalletTransaction in Wallet B
+  sweptAt               DateTime?   // set when the principal was swept B -> A; null = not yet swept
+  createdAt             DateTime    @default(now())
+
+  @@index([sweptAt])
+}
+
+model DecisionLog {
+  id                  Int       @id @default(autoincrement())
+  decisionId          String    @unique  // unique reference for this decision
+  meterToken          String             // pseudonymised identifier as supplied by DisCo
+  band                String             // tariff band at decision time
+  features            Json               // complete feature vector with named values
+  modelVersion        String             // scoring model version applied
+  parameterVersion    String             // credit parameter envelope version
+  decision            String             // approved | declined
+  declineReason       String?            // where applicable
+  approvedLimitKobo   Int?               // where approved
+  requestedKobo       Int                // obligation requested
+  latencyMs           Int                // scoring call duration
+  timestampUtc        DateTime           // decision time
+  correlationId       String?            // ties decision to resulting transaction
+  createdAt           DateTime           @default(now())
+
+  @@index([meterToken])
+  @@index([correlationId])
+}
+
+model Wallet {
+  id          Int               @id @default(autoincrement())
+  walletType  WalletType        // A or B
+  balance     Decimal?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @default(now())
+  transactions WalletTransaction[]
+}
+
+model WalletTransaction {
+  id            Int       @id @default(autoincrement())
+  walletId      Int
+  wallet        Wallet    @relation(fields: [walletId], references: [id])
+  type          String    // disbursement | recovery | sweep | top-up | commission
+  amountKobo    Int       // positive = credit to wallet, negative = debit from wallet
+  referenceId   String?   // links to obligation, transaction, or sweep job
+  description   String
+  createdAt     DateTime  @default(now())
+}
+
+model Meter_State {
+  id          Int      @id @default(autoincrement())
+  date        DateTime
+  meterToken String
+  state       String
+}
+
+model FeatureFlag {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique  // e.g. 'disbursements_enabled'
+  enabled     Boolean  @default(true)
+  description String   // what this flag controls
+  updatedBy   String   // email of person who last changed it
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
+model Float_Ledger {
+  id                  Int      @id @default(autoincrement())
+  date                DateTime
+  referenceId         String?
+  amount              Decimal
+  type                String
+  currentFloatBalance Decimal
+  attachmentUrl       String?
+  financeHouseId      Int?
+  financeHouses       FinanceHouse? @relation(fields: [financeHouseId], references: [id])
+  discoAdminId        Int?
+  discoAdmin          DiscoAdmin? @relation(fields: [discoAdminId], references: [id])
+}
+
+model Loan_Threshold {
+  id      Int     @id @default(autoincrement())
+  minimum Decimal
+  maximum Decimal
+}
+
+model Customer {
+  id                  Int                  @id @default(autoincrement())
+  lastInteraction     DateTime
+  meterToken          String               @unique  // pseudonymised — was meterNumber
+  band                TariffBand           @default(B) // tariff band — affects obligation status windows
+  riskLevel           String
+  outstanding         Decimal
+  status              String
+  state               String
+  dateAdded           DateTime
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @default(now())
+  customerAggregators CustomerAggregator[]
+  customerDiscoAdmins CustomerDiscoAdmin[]
+  transactions        Transactions[]
+  monseraEarnings     MonseraEarnings[]
+  obligations         Obligation[]
+
+  @@map("Customers")
+}
+
+model CustomerAggregator {
+  id           Int        @id @default(autoincrement())
+  customerId   Int
+  aggregatorId Int
+  addedAt      DateTime   @default(now())
+  isActive     Boolean    @default(true)
+  aggregator   Aggregator @relation(fields: [aggregatorId], references: [id], onDelete: Cascade)
+  customer     Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, aggregatorId])
+  @@map("CustomerAggregators")
+}
+
+model CustomerDiscoAdmin {
+  id           Int        @id @default(autoincrement())
+  customerId   Int
+  discoAdminId Int
+  addedAt      DateTime   @default(now())
+  isActive     Boolean    @default(true)
+  discoAdmin   DiscoAdmin @relation(fields: [discoAdminId], references: [id], onDelete: Cascade)
+  customer     Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, discoAdminId])
+  @@map("CustomerDiscoAdmins")
+}
+
+model Aggregator {
+  id                  Int                  @id @default(autoincrement())
+  userId              Int?                 @unique
+  lastInteraction     DateTime
+  name                String               @unique
+  outstanding         Decimal
+  status              String
+  mail                String               @unique
+  logoUrl             String?
+  apiKey              String?
+  balance             Decimal?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @default(now())
+  user                User?                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerAggregators CustomerAggregator[]
+  transactions        Transactions[]
+  monseraEarnings     MonseraEarnings[]
+
+  @@map("Aggregators")
+}
+
+model DiscoAdmin {
+  id                  Int                  @id @default(autoincrement())
+  userId              Int?                 @unique
+  lastInteraction     DateTime
+  name                String               @unique
+  status              String
+  mail                String               @unique
+  logoUrl             String?
+  apiKey              String?
+  balance             Decimal?
+  outstanding         Decimal?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @default(now())
+  user                User?                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerDiscoAdmins CustomerDiscoAdmin[]
+  transactions        Transactions[]
+  floats              Float_Ledger[]
+  monseraEarnings     MonseraEarnings[]
+  obligations         Obligation[]
+  vendRecords         VendRecord[]              
+  vendIngestionFailures VendIngestionFailure[]
+
+  @@map("DiscoAdmins")
+}
+
+model FinanceHouse {
+  id                  Int                  @id @default(autoincrement())
+  userId              Int?                 @unique
+  lastInteraction     DateTime
+  name                String               @unique
+  amountSpent         Decimal?
+  status              String
+  mail                String               @unique
+  logoUrl             String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @default(now())
+  user                User?                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  floats              Float_Ledger[]
+
+  @@map("FinanceHouses")
+}
+
+model Role {
+  id                    Int        @id @default(autoincrement())
+  name                  String     @unique
+  description           String
+  canViewTransactions   Boolean    @default(false)
+  canManageTransactions Boolean    @default(false)
+  canViewUsers          Boolean    @default(false)
+  canManageUsers        Boolean    @default(false)
+  canBlacklistUsers     Boolean    @default(false)
+  canActivateUsers      Boolean    @default(false)
+  canViewScoringEngine  Boolean    @default(false)
+  canEditThreshold      Boolean    @default(false)
+  canValidateLoans      Boolean    @default(false)
+  employees             Employee[]
+
+  @@map("Roles")
+}
+
+model Employee {
+  id           Int    @id @default(autoincrement())
+  name         String
+  emailAddress String @unique
+  phoneNumber  String
+  status       String
+  gender       String
+  roleId       Int
+  userId       Int?   @unique
+  role         Role   @relation(fields: [roleId], references: [id])
+  user         User?  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("Employees")
+}
+
+model Audit {
+  id           Int      @id @default(autoincrement())
+  date         DateTime @default(now())
+  employeeName String
+  emailAddress String
+  activity     String
+  userId       Int?
+  meterId      String?
+  state        String?
+  reason       String?
+  user         User?    @relation(fields: [userId], references: [id])
+}
+
+model MonseraEarnings {
+  id           Int        @id @default(autoincrement())
+  amount       Decimal
+  customerId   Int
+  aggregatorId Int?
+  discoAdminId Int
+  transactionId Int?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @default(now())
+  aggregator   Aggregator? @relation(fields: [aggregatorId], references: [id])
+  discoAdmin   DiscoAdmin  @relation(fields: [discoAdminId], references: [id])
+  customer     Customer    @relation(fields: [customerId], references: [id])
+  transaction  Transactions? @relation(fields: [transactionId], references: [id])
+}
+
+model IdempotencyRecord {
+  id             Int      @id @default(autoincrement())
+  key            String   @unique
+  aggregatorId   Int?
+  discoAdminId   Int?
+  responseStatus Int
+  responseBody   Json
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+}
+
+model CreditParameters {
+  id                    Int      @id @default(autoincrement())
+  version               String   @unique
+  rateBps               Int      // service charge rate e.g. 1000 = 10%
+  minObligationKobo     Int      // minimum advance e.g. 200000 = N2,000
+  maxObligationKobo     Int      // maximum advance e.g. 700000 = N7,000
+  maxConcurrentObligations Int   // 1 = meter may not hold more than one outstanding obligation
+  obligationTiersKobo   Int[]    @default([]) // permitted obligation amounts, e.g. {200000,400000,700000}; empty = any amount within min/max
+  isActive              Boolean  @default(true)
+  effectiveFrom         DateTime
+  createdAt             DateTime @default(now())
+}
+
+/// Spec §5.2 threshold configuration. Recalibrated monthly without a code
+/// deployment. Each obligation's windows are computed once, at disbursement,
+/// with the parameters in force then (windowParameterVersion on Obligation).
+model RecoveryWindowParameters {
+  id                Int      @id @default(autoincrement())
+  version           String   @unique
+  watchMultiplier   Decimal  @db.Decimal(6, 3) // watch_days   = max(round(m * E), minWatchDays)
+  delayedMultiplier Decimal  @db.Decimal(6, 3) // delayed_days = max(round(m * E), minDelayedDays)
+  defaultMultiplier Decimal  @db.Decimal(6, 3) // default_days = min(max(round(m * E), minDefaultDays), maxDefaultDays)
+  minWatchDays      Int
+  minDelayedDays    Int
+  minDefaultDays    Int
+  maxDefaultDays    Int
+  isActive          Boolean  @default(true)
+  effectiveFrom     DateTime
+  createdAt         DateTime @default(now())
+}
+
+/// Spec §3.2 participating cohort: the ring-fenced meters APLE has shared.
+/// A meter not present (or removed) is declined before any scoring call.
+model CohortMeter {
+  id         Int       @id @default(autoincrement())
+  meterToken String    @unique
+  source     String?   // e.g. the APLE file the token was imported from
+  addedAt    DateTime  @default(now())
+  removedAt  DateTime? // ring-fence released for this meter; null = in cohort
+}
+
+/// Outcome of each reconciliation run (spec §8), so settlement can require a
+/// passed run for its period and results are auditable.
+model ReconciliationRun {
+  id        Int      @id @default(autoincrement())
+  kind      String   // daily | monthly
+  period    String   // YYYY-MM-DD (daily) or YYYY-MM (monthly), WAT
+  passed    Boolean
+  details   Json
+  createdAt DateTime @default(now())
+
+  @@index([kind, period])
+}
+
+model BurnRate {
+  id           Int        @id @default(autoincrement())
+  band         TariffBand
+  dailyBurnNaira Int      // e.g. 1100 for Band A
+  effectiveFrom DateTime
+  createdAt    DateTime   @default(now())
+}
+
+enum VendType {
+  PREPAID_TOKEN
+  POSTPAID_PAYMENT
+  TOKEN_TOP_UP
+}
+
+enum VendStatus {
+  SUCCESSFUL
+  FAILED
+}
+
+enum VendProcessingStatus {
+  Pending
+  Processed
+}
+
+model VendRecord {
+  id               Int                  @id @default(autoincrement())
+  discoAdminId     Int
+  discoAdmin       DiscoAdmin           @relation(fields: [discoAdminId], references: [id])
+  partnerVendId    String
+  meterToken       String
+  amountKobo       Int
+  vendType         VendType
+  vendStatus       VendStatus
+  vendedAt         DateTime
+  receivedAt       DateTime             @default(now())
+  processingStatus VendProcessingStatus @default(Pending)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  revisions        VendRecordRevision[]
+
+  @@unique([discoAdminId, partnerVendId])
+  @@index([meterToken, vendedAt])
+  @@index([discoAdminId, processingStatus])
+}
+
+model VendRecordRevision {
+  id                  Int        @id @default(autoincrement())
+  vendRecordId        Int
+  vendRecord          VendRecord @relation(fields: [vendRecordId], references: [id])
+  previousAmountKobo  Int
+  newAmountKobo       Int
+  previousVendType    VendType
+  newVendType         VendType
+  previousVendStatus  VendStatus
+  newVendStatus       VendStatus
+  previousVendedAt    DateTime
+  newVendedAt         DateTime
+  createdAt           DateTime   @default(now())
+
+  @@index([vendRecordId])
+}
+
+model VendIngestionFailure {
+  id                     Int        @id @default(autoincrement())
+  discoAdminId           Int
+  discoAdmin             DiscoAdmin @relation(fields: [discoAdminId], references: [id])
+  submittedPartnerVendId String?
+  submittedMeterToken    String?
+  submittedAmountKobo    String?
+  submittedVendType      String?
+  submittedVendStatus    String?
+  submittedVendedAt      String?
+  unrecognizedFields     String?
+  reason                 String
+  reportedAt             DateTime?
+  createdAt              DateTime   @default(now())
+
+  @@index([discoAdminId, reportedAt])
+}
+
+model CustomerVendMetrics {
+  id                       Int         @id @default(autoincrement())
+  meterToken               String      @unique
+  meterStatus              String
+  totalVends               Int
+  vendCountLast60Days      Int         @default(0)
+  vendCountLast365Days     Int?
+  daysSinceLastVend        Int?        @default(0)
+
+  medianVendAmountNaira    Decimal?    @db.Decimal(18, 6)
+  vendAmountVolatility     Decimal?    @db.Decimal(18, 6)
+
+  interVendVarianceDays    Decimal?    @db.Decimal(18, 6)
+  failedVendRatio          Decimal     @default(0) @db.Decimal(7, 4)
+
+  tariffBand               TariffBand?
+  tariffClass              String?
+  customerType              String?
+  district                  String?
+  hasTransactions            Boolean?
+
+  featureAsOfDate          DateTime    @db.Date
+  featureDefinitionVersion String      @default("aple_live_v2")
+
+  createdAt                DateTime    @default(now())
+  updatedAt                DateTime    @updatedAt
+}
+
+enum VendRecordStatus {
+  Pending
+  Processed
+  Failed
+}
+
+
+
+enum UserType {
+  MONSERA_ADMIN
+  DISCO_ADMIN
+  EMPLOYEE
+  AGGREGATOR
+  CUSTOMER
+  FINANCE_HOUSE
+}
+
+enum AdminType {
+  MONSERA_ADMIN
+  DISCO_ADMIN
+  AGGREGATOR
+  FINANCE_HOUSE
+}
+
+enum ObligationStatus {
+  Current
+  Watch
+  Delayed
+  Default
+  Discharged
+}
+
+enum TariffBand {
+  A
+  B
+  C
+}
+
+enum WalletType {
+  A  // Credit wallet — funds disbursements
+  B  // Repayment wallet — receives recoveries
+  C // Monsera Wallet
+}

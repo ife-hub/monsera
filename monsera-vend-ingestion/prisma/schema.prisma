@@ -1,3 +1,4 @@
+// GENERATED COPY of db/schema.prisma. Do not edit here: edit db/schema.prisma, then run `npm run schema:sync` at the repo root.
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["driverAdapters"]
@@ -5,6 +6,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -14,6 +16,7 @@ model User {
   name         String
   userType     UserType
   isActive     Boolean      @default(true)
+  passwordChangedAt DateTime? // tokens issued before this are rejected (logs out other sessions)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   aggregator   Aggregator?
@@ -89,6 +92,7 @@ model Obligation {
   delayedDate         DateTime              // threshold for Delayed status
   defaultDate         DateTime              // threshold for Default status
 
+  windowParameterVersion String?           // RecoveryWindowParameters.version used to compute the dates above
   clockSuspended      Boolean               @default(false)
   suspendedDays       Int                   @default(0) // accumulated suspended days
 
@@ -126,7 +130,10 @@ model ObligationRecovery {
   principalKobo         Int         // principal component
   serviceKobo           Int         // service charge component
   walletBRecordId       Int?        // links to WalletTransaction in Wallet B
+  sweptAt               DateTime?   // set when the principal was swept B -> A; null = not yet swept
   createdAt             DateTime    @default(now())
+
+  @@index([sweptAt])
 }
 
 model DecisionLog {
@@ -396,9 +403,51 @@ model CreditParameters {
   minObligationKobo     Int      // minimum advance e.g. 200000 = N2,000
   maxObligationKobo     Int      // maximum advance e.g. 700000 = N7,000
   maxConcurrentObligations Int   // 1 = meter may not hold more than one outstanding obligation
+  obligationTiersKobo   Int[]    @default([]) // permitted obligation amounts, e.g. {200000,400000,700000}; empty = any amount within min/max
   isActive              Boolean  @default(true)
   effectiveFrom         DateTime
   createdAt             DateTime @default(now())
+}
+
+/// Spec §5.2 threshold configuration. Recalibrated monthly without a code
+/// deployment. Each obligation's windows are computed once, at disbursement,
+/// with the parameters in force then (windowParameterVersion on Obligation).
+model RecoveryWindowParameters {
+  id                Int      @id @default(autoincrement())
+  version           String   @unique
+  watchMultiplier   Decimal  @db.Decimal(6, 3) // watch_days   = max(round(m * E), minWatchDays)
+  delayedMultiplier Decimal  @db.Decimal(6, 3) // delayed_days = max(round(m * E), minDelayedDays)
+  defaultMultiplier Decimal  @db.Decimal(6, 3) // default_days = min(max(round(m * E), minDefaultDays), maxDefaultDays)
+  minWatchDays      Int
+  minDelayedDays    Int
+  minDefaultDays    Int
+  maxDefaultDays    Int
+  isActive          Boolean  @default(true)
+  effectiveFrom     DateTime
+  createdAt         DateTime @default(now())
+}
+
+/// Spec §3.2 participating cohort: the ring-fenced meters APLE has shared.
+/// A meter not present (or removed) is declined before any scoring call.
+model CohortMeter {
+  id         Int       @id @default(autoincrement())
+  meterToken String    @unique
+  source     String?   // e.g. the APLE file the token was imported from
+  addedAt    DateTime  @default(now())
+  removedAt  DateTime? // ring-fence released for this meter; null = in cohort
+}
+
+/// Outcome of each reconciliation run (spec §8), so settlement can require a
+/// passed run for its period and results are auditable.
+model ReconciliationRun {
+  id        Int      @id @default(autoincrement())
+  kind      String   // daily | monthly
+  period    String   // YYYY-MM-DD (daily) or YYYY-MM (monthly), WAT
+  passed    Boolean
+  details   Json
+  createdAt DateTime @default(now())
+
+  @@index([kind, period])
 }
 
 model BurnRate {
@@ -551,4 +600,5 @@ enum TariffBand {
 enum WalletType {
   A  // Credit wallet — funds disbursements
   B  // Repayment wallet — receives recoveries
+  C // Monsera Wallet
 }

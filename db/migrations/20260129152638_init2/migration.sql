@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Aggregators" ALTER COLUMN "apiKey" DROP NOT NULL,
+ALTER COLUMN "balance" DROP NOT NULL;

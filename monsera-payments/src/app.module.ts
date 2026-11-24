@@ -1,26 +1,15 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { BullModule } from '@nestjs/bullmq';
-import { PrismaModule } from './prisma/prisma.module';
-import { TransactionsModule } from './transactions/transactions.module';
-import { RecoveryProcessor } from './queues/recovery.processor';
 import { HealthController } from './health/health.controller';
-import { EventsModule } from './events/events.module';
+import { WorkersService } from './workers.service';
 
+/**
+ * monsera-payments: disbursement (debit), recovery (credit), wallets,
+ * transactions, credit/recovery-window configuration, cohort, clock
+ * suspensions, and the scheduled money jobs. Its HTTP API is mounted from
+ * src/routes.ts (see route-adapter.ts).
+ */
 @Module({
-  imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
-    BullModule.forRoot({
-      connection: {
-        url: process.env.REDIS_URL, // the DO Valkey URL, not Upstash
-        maxRetriesPerRequest: null,
-      },
-    }),
-    PrismaModule,
-    TransactionsModule,
-    EventsModule,
-  ],
-  providers: [RecoveryProcessor],
   controllers: [HealthController],
+  providers: [WorkersService],
 })
 export class AppModule {}
