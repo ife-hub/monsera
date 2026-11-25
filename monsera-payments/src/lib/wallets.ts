@@ -66,7 +66,45 @@ export async function adjustWallet(
   if (!Number.isInteger(deltaKobo) || deltaKobo === 0) {
     throw new Error(`Wallet adjustment must be a non-zero integer kobo amount, got ${deltaKobo}`);
   }
+  if (Math.abs(deltaKobo) <= MAX_LEDGER_ROW_KOBO) {
+    return adjustWalletOnce(tx, walletId, deltaKobo, type, description, referenceId);
+  }
 
+  // Larger than one ledger row can hold (amountKobo is a 32-bit column): the
+  // same movement as several rows of at most MAX_LEDGER_ROW_KOBO, with the
+  // same type and reference. A debit is checked in full first, under the
+  // wallet's lock, so it moves all of it or nothing.
+  const sign = Math.sign(deltaKobo);
+  if (sign < 0) {
+    const balanceKobo = await lockWallet(tx, walletId);
+    if (balanceKobo + deltaKobo < 0) throw new InsufficientWalletBalanceError(walletId, balanceKobo, -deltaKobo);
+  }
+  let result: Awaited<ReturnType<typeof adjustWalletOnce>> | undefined;
+  const records = [];
+  let firstPrevious: number | undefined;
+  for (let left = Math.abs(deltaKobo); left > 0; left -= MAX_LEDGER_ROW_KOBO) {
+    result = await adjustWalletOnce(tx, walletId, sign * Math.min(left, MAX_LEDGER_ROW_KOBO), type, description, referenceId);
+    firstPrevious ??= result.previousBalanceKobo;
+    records.push(result.record);
+  }
+  return { ...result!, previousBalanceKobo: firstPrevious!, records };
+}
+
+/**
+ * Largest amount one WalletTransaction row holds (its amountKobo column is a
+ * 32-bit integer, max 2,147,483,647). ₦20,000,000.
+ */
+export const MAX_LEDGER_ROW_KOBO = 2_000_000_000;
+
+/** One balance move and its ledger row, in one statement (|deltaKobo| <= MAX_LEDGER_ROW_KOBO). */
+async function adjustWalletOnce(
+  tx: Tx,
+  walletId: number,
+  deltaKobo: number,
+  type: string,
+  description: string,
+  referenceId?: string
+) {
   const rows = await tx.$queryRaw<AdjustedRow[]>`
     WITH updated AS (
       UPDATE "Wallet"
@@ -103,7 +141,7 @@ export async function adjustWallet(
     createdAt: row.recordCreatedAt,
   };
   const newBalanceKobo = Math.round(Number(row.balance ?? 0) * 100);
-  return { wallet, record, previousBalanceKobo: newBalanceKobo - deltaKobo, newBalanceKobo };
+  return { wallet, record, records: [record], previousBalanceKobo: newBalanceKobo - deltaKobo, newBalanceKobo };
 }
 
 interface AdjustedRow {
