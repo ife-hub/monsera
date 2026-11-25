@@ -1,4 +1,5 @@
 import prisma from './prisma';
+import { cachedSetting, invalidateSettings } from './settings-cache';
 
 export type FlagKey =
   | 'disbursements_enabled'
@@ -32,7 +33,8 @@ export const FLAG_DEFAULTS: Record<FlagKey, boolean> = {
  */
 export async function isEnabled(key: FlagKey): Promise<boolean> {
   try {
-    const flag = await prisma.featureFlag.findUnique({ where: { key } });
+    // Cached for a few seconds (lib/settings-cache.ts); a change takes effect within SETTINGS_CACHE_MS.
+    const flag = await cachedSetting(`flag:${key}`, () => prisma.featureFlag.findUnique({ where: { key } }));
     if (!flag) return FLAG_DEFAULTS[key];
     return flag.enabled;
   } catch (error) {
@@ -59,6 +61,7 @@ export async function setFlag(
       description: `Auto-created flag for ${key}`,
     },
   });
+  invalidateSettings('flag:');
 }
 
 /**

@@ -10,7 +10,9 @@ Scheduled jobs (`src/lib/scheduled-jobs.ts`, West Africa Time, run once per tick
 
 **Disco and aggregator totals** (`src/lib/partner-totals.ts`). A disco's balance and outstanding, and an aggregator's outstanding, are running totals that every advance and repayment through that partner changes. Updating the partner's row inside each money transaction made every advance through one disco (APLE) queue on that row. Advances and repayments now record the change as a `PartnerBalanceChange` row (an insert never waits), and payments adds the pending changes into the partner rows every 2 seconds (`PARTNER_TOTALS_FOLD_MS`; on every worker instance, and once more on shutdown). The rows may lag by those seconds; nothing approves or refuses an advance from them (Wallet A is the only funding check), reconciliation does not use them, and the disco balance returned with an advance is exact (row plus pending changes).
 
-Environment: `DATABASE_URL`, `REDIS_URL`, `BULLMQ_PREFIX`, `JWT_SECRET`, `WALLET_A_ID`, `WALLET_B_ID`, `WALLET_C_ID`, `WALLET_A_SHARDS`, `PARTNER_TOTALS_FOLD_MS`, `SCORING_ENGINE_URL`, `SCORING_ENGINE_SECRET`, `CRON_SECRET`, optional `SENTRY_DSN`.
+**Settings cache** (`src/lib/settings-cache.ts`). Feature flags, credit parameters, recovery-window parameters and burn rates are read on every advance but rarely change, so each payments instance caches them for `SETTINGS_CACHE_MS` (default 5 seconds). A change takes effect within that time on every instance, and at once on the instance that saved it. A failed read is never cached.
+
+Environment: `DATABASE_URL`, `REDIS_URL`, `BULLMQ_PREFIX`, `JWT_SECRET`, `WALLET_A_ID`, `WALLET_B_ID`, `WALLET_C_ID`, `WALLET_A_SHARDS`, `PARTNER_TOTALS_FOLD_MS`, `SETTINGS_CACHE_MS`, `SCORING_ENGINE_URL`, `SCORING_ENGINE_SECRET`, `CRON_SECRET`, optional `SENTRY_DSN`.
 
 ```bash
 npm ci                     # also runs prisma generate
