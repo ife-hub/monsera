@@ -115,7 +115,23 @@ async function debitHandler(request: AuthenticatedRequest) {
     }
 
     const decisionId = randomUUID();
-    let customer = await prisma.customer.findUnique({ where: { meterToken } });
+    // The reads the checks below need don't depend on each other, so they go
+    // to the database together: one wait instead of one per read. The checks
+    // still run in the same order with the same outcomes; a decline early on
+    // only means a few reads were not needed.
+    const [customerRow, inCohort, vendMetrics, openObligationCount, disbursementsEnabled, scoringEnabled] = await Promise.all([
+      prisma.customer.findUnique({ where: { meterToken } }),
+      isInCohort(meterToken),
+      prisma.customerVendMetrics.findUnique({ where: { meterToken } }),
+      // Open advances for this meter (every obligation carries its meterToken;
+      // a brand-new meter has none).
+      prisma.obligation.count({
+        where: { meterToken, status: { in: [...OPEN_OBLIGATION_STATUSES] }, remainingKobo: { gt: 0 } },
+      }),
+      isEnabled('disbursements_enabled'),
+      isEnabled('scoring_engine_enabled'),
+    ]);
+    let customer = customerRow;
     const baseDecision = {
       decisionId,
       meterToken,
@@ -142,27 +158,19 @@ async function debitHandler(request: AuthenticatedRequest) {
       return json({ success: true, decision: 'declined', reason, requestedKobo: calc!.obligationKobo, decisionId, ...extra }, 200);
     };
 
-    if (!(await isEnabled('disbursements_enabled'))) {
+    if (!disbursementsEnabled) {
       return declineByRule('disbursements_suspended', 'Disbursements are temporarily suspended. Please try again later.',
         { meter_id: meterToken, disbursements_enabled: false }, customer?.band ?? 'B');
     }
 
     // ── 5. §3.2 cohort check — no scoring call outside the cohort ─────────
-    if (!(await isInCohort(meterToken))) {
+    if (!inCohort) {
       return declineByRule('cohort', 'Meter is not in the participating cohort',
         { meter_id: meterToken, in_cohort: false }, customer?.band ?? 'B');
     }
 
     // ── 6. Feature vector ──────────────────────────────────────────────────
-    const vendMetrics = await prisma.customerVendMetrics.findUnique({ where: { meterToken } });
     const band = customer?.band ?? vendMetrics?.tariffBand ?? 'B';
-    // A brand-new customer has no obligations. (`customerId: undefined` used
-    // to drop the filter and match any customer's loan.)
-    const openObligationCount = customer
-      ? await prisma.obligation.count({
-          where: { customerId: customer.id, status: { in: [...OPEN_OBLIGATION_STATUSES] }, remainingKobo: { gt: 0 } },
-        })
-      : 0;
 
     const scoringParams = {
       meter_id: meterToken,
@@ -193,7 +201,7 @@ async function debitHandler(request: AuthenticatedRequest) {
     if (openObligationCount >= params.maxConcurrentObligations) {
       return declineByRule('concurrent_obligations', 'Meter already has the maximum number of outstanding advances', features, band);
     }
-    if (!(await isEnabled('scoring_engine_enabled'))) {
+    if (!scoringEnabled) {
       return declineByRule('scoring_disabled', 'Eligibility check temporarily unavailable. Please try again later.', features, band);
     }
 
