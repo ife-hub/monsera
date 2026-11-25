@@ -220,3 +220,68 @@ suite('Wallet A sub-wallets on a real database', () => {
     expect(identity.holds).toBe(true);
   });
 });
+
+suite('large wallet movements on a real database', () => {
+  jest.setTimeout(60_000);
+  let prisma: any;
+  let wallets: typeof import('@/lib/wallets');
+  let walletA: typeof import('@/lib/wallet-a');
+
+  beforeAll(async () => {
+    prisma = (await import('@/lib/prisma')).default;
+    wallets = await import('@/lib/wallets');
+    walletA = await import('@/lib/wallet-a');
+  });
+
+  beforeEach(async () => {
+    const tables = await prisma.$queryRaw`SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`;
+    await prisma.$executeRawUnsafe(`TRUNCATE ${tables.map((t: any) => `"${t.tablename}"`).join(', ')} RESTART IDENTITY CASCADE`);
+    Object.assign(process.env, { WALLET_A_ID: '1', WALLET_B_ID: '2', WALLET_C_ID: '3', WALLET_A_SHARDS: '8' });
+    await prisma.wallet.createMany({ data: [{ id: 1, walletType: 'A', balance: 0 }, { id: 2, walletType: 'B', balance: 0 }, { id: 3, walletType: 'C', balance: 0 }] });
+  });
+
+  afterAll(async () => {
+    delete process.env.WALLET_A_SHARDS;
+    await prisma?.$disconnect();
+  });
+
+  const balanceKobo = async (id: number) => Math.round(Number((await prisma.wallet.findUnique({ where: { id } })).balance) * 100);
+  const ledgerKobo = async (id: number) =>
+    Number((await prisma.walletTransaction.aggregate({ where: { walletId: id }, _sum: { amountKobo: true } }))._sum.amountKobo ?? 0);
+
+  it('a movement larger than one ledger row holds is recorded as several rows of the same type and reference', async () => {
+    const result = await prisma.$transaction((tx: any) => wallets.adjustWallet(tx, 1, 5_000_000_000, 'top-up', '₦50m float', 'TOPUP-1'));
+
+    expect(result.records.map((r: any) => r.amountKobo)).toEqual([2_000_000_000, 2_000_000_000, 1_000_000_000]);
+    expect(result.previousBalanceKobo).toBe(0);
+    expect(result.newBalanceKobo).toBe(5_000_000_000);
+    expect(await balanceKobo(1)).toBe(5_000_000_000);
+    expect(await ledgerKobo(1)).toBe(5_000_000_000);
+    expect(await prisma.walletTransaction.count({ where: { referenceId: 'TOPUP-1', type: 'top-up' } })).toBe(3);
+  });
+
+  it('a large debit is all-or-nothing', async () => {
+    await prisma.$transaction((tx: any) => wallets.adjustWallet(tx, 1, 5_000_000_000, 'top-up', 'float'));
+
+    const error = await prisma.$transaction((tx: any) => wallets.adjustWallet(tx, 1, -6_000_000_000, 'withdrawal', 'too much')).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(wallets.InsufficientWalletBalanceError);
+    expect(await balanceKobo(1)).toBe(5_000_000_000);
+
+    await prisma.$transaction((tx: any) => wallets.adjustWallet(tx, 1, -4_500_000_000, 'withdrawal', 'principal return'));
+    expect(await balanceKobo(1)).toBe(500_000_000);
+    expect(await ledgerKobo(1)).toBe(500_000_000);
+  });
+
+  it('spreads a multi-billion-naira Wallet A over its sub-wallets (failed with "integer out of range" before)', async () => {
+    // ₦2.5bn in Wallet A, like the staging test database.
+    await prisma.$transaction((tx: any) => wallets.adjustWallet(tx, 1, 250_000_000_000, 'top-up', 'float'));
+    await walletA.ensureWalletASubWallets();
+    await walletA.rebalanceWalletA();
+
+    const rows = await prisma.wallet.findMany({ where: { OR: [{ id: 1 }, { parentWalletId: 1 }] } });
+    expect(rows).toHaveLength(8);
+    expect(rows.every((r: any) => Math.round(Number(r.balance) * 100) === 31_250_000_000)).toBe(true);
+    expect(await walletA.walletABalanceKobo()).toBe(250_000_000_000);
+    for (const r of rows) expect(await ledgerKobo(r.id)).toBe(await balanceKobo(r.id));
+  });
+});
