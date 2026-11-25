@@ -560,13 +560,19 @@ describe('debit route — eligibility regressions', () => {
   }
 
   it('does not treat a brand-new customer as having an active obligation', async () => {
-    // Before the fix, `customerId: undefined` dropped the filter and matched any loan.
+    // Once a bug: counting by `customerId: undefined` dropped the filter and
+    // matched any loan. The count is keyed by this meter's own token, which
+    // is always present, so it can only ever see this meter's advances.
     mockPrisma.customer.findUnique.mockResolvedValue(null);
+    mockPrisma.obligation.count.mockResolvedValue(0);
     mockPrisma.$transaction.mockImplementation(async (cb: any) => cb(makeTxMock()));
 
     await debitPost(approvedRequest());
 
-    expect(mockPrisma.obligation.count).not.toHaveBeenCalled();
+    expect(mockPrisma.obligation.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ meterToken: 'MT-001', remainingKobo: { gt: 0 } }),
+    });
+    expect(mockPrisma.obligation.count.mock.calls[0][0].where).not.toHaveProperty('customerId');
     expect(scoringBody().has_active_obligation).toBe(false);
   });
 
