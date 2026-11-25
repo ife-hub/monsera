@@ -1,4 +1,5 @@
 import { NextResponse } from '../../../lib/next-server';
+import { invalidateSettings } from '../../../lib/settings-cache';
 import prisma from '../../../lib/prisma';
 import { authenticate, authorize, AuthenticatedRequest } from '../../../middleware/auth';
 import { TariffBand, UserType } from '@prisma/client';
@@ -36,6 +37,7 @@ async function postHandler(request: AuthenticatedRequest) {
   }
 
   const row = await prisma.burnRate.create({ data: { band, dailyBurnNaira, effectiveFrom: from } });
+  invalidateSettings('burn-rates:'); // this instance at once; others within SETTINGS_CACHE_MS
   await prisma.audit.create({
     data: {
       userId: request.user!.userId,

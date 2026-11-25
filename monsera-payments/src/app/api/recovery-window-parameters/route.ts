@@ -1,4 +1,5 @@
 import { NextResponse } from '../../../lib/next-server';
+import { invalidateSettings } from '../../../lib/settings-cache';
 import prisma from '../../../lib/prisma';
 import { authenticate, authorize, AuthenticatedRequest } from '../../../middleware/auth';
 import { Prisma, UserType } from '@prisma/client';
@@ -76,6 +77,7 @@ async function postHandler(request: AuthenticatedRequest) {
     return row;
   });
 
+    invalidateSettings('window-parameters'); // this instance at once; others within SETTINGS_CACHE_MS
   return NextResponse.json({ success: true, data: created }, { status: 201, headers });
 }
 

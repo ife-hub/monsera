@@ -1,4 +1,5 @@
 import prisma from './prisma';
+import { cachedSetting } from './settings-cache';
 import { RATE_BPS, MIN_OBLIGATION_KOBO, MAX_OBLIGATION_KOBO } from './calculation';
 
 export interface ActiveCreditParameters {
@@ -31,10 +32,13 @@ export function envObligationTiersKobo(): number[] {
  * Falls back to env values if no active CreditParameters row exists yet.
  */
 export async function getActiveCreditParameters(): Promise<ActiveCreditParameters> {
-  const row = await prisma.creditParameters.findFirst({
-    where: { isActive: true, effectiveFrom: { lte: new Date() } },
-    orderBy: { effectiveFrom: 'desc' },
-  });
+  // Cached for a few seconds (lib/settings-cache.ts).
+  const row = await cachedSetting('credit-parameters', () =>
+    prisma.creditParameters.findFirst({
+      where: { isActive: true, effectiveFrom: { lte: new Date() } },
+      orderBy: { effectiveFrom: 'desc' },
+    })
+  );
 
   if (row) {
     return {

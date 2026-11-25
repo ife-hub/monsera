@@ -3,6 +3,7 @@
  * the one implementation of the recovery window and status rules.
  */
 import prisma from './prisma';
+import { cachedSetting } from './settings-cache';
 import {
   computeWindows,
   dailyRateKobo,
@@ -42,10 +43,13 @@ export function evaluateStatus(
 
 /** Recovery-window parameters in force now (RecoveryWindowParameters), else §5.2 as written. */
 export async function getActiveWindowParameters(): Promise<WindowParameters> {
-  const row = await prisma.recoveryWindowParameters.findFirst({
-    where: { isActive: true, effectiveFrom: { lte: new Date() } },
-    orderBy: { effectiveFrom: 'desc' },
-  });
+  // Cached for a few seconds (lib/settings-cache.ts).
+  const row = await cachedSetting('window-parameters', () =>
+    prisma.recoveryWindowParameters.findFirst({
+      where: { isActive: true, effectiveFrom: { lte: new Date() } },
+      orderBy: { effectiveFrom: 'desc' },
+    })
+  );
   if (!row) return SPEC_WINDOW_PARAMETERS;
   return {
     version: row.version,
@@ -61,11 +65,15 @@ export async function getActiveWindowParameters(): Promise<WindowParameters> {
 
 /** Daily burn (kobo) for a band at a date: latest effective BurnRate row, else the §5.1 band default. */
 export async function getDailyRateKobo(band: TariffBand, asAt: Date): Promise<number> {
-  const rates = await prisma.burnRate.findMany({
-    where: { band, effectiveFrom: { lte: asAt } },
-    orderBy: { effectiveFrom: 'desc' },
-    take: 1,
-    select: { band: true, dailyBurnNaira: true, effectiveFrom: true },
-  });
-  return dailyRateKobo(band, rates, asAt);
+  // The band's rate history is cached for a few seconds (lib/settings-cache.ts);
+  // the rate in force at `asAt` is picked from it here.
+  const history = await cachedSetting(`burn-rates:${band}`, () =>
+    prisma.burnRate.findMany({
+      where: { band },
+      orderBy: { effectiveFrom: 'desc' },
+      select: { band: true, dailyBurnNaira: true, effectiveFrom: true },
+    })
+  );
+  const inForce = history.filter((r) => r.effectiveFrom <= asAt).slice(0, 1);
+  return dailyRateKobo(band, inForce, asAt);
 }

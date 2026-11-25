@@ -1,4 +1,5 @@
 import { NextResponse } from '../../../lib/next-server';
+import { invalidateSettings } from '../../../lib/settings-cache';
 import * as Sentry from '../../../lib/monitoring';
 import prisma from '../../../lib/prisma';
 import { authenticate, authorize, AuthenticatedRequest } from '../../../middleware/auth';
@@ -161,6 +162,7 @@ async function postHandler(request: AuthenticatedRequest) {
       { timeout: 15000, maxWait: 5000 }
     );
 
+    invalidateSettings('credit-parameters'); // this instance at once; others within SETTINGS_CACHE_MS
     return NextResponse.json({ success: true, data: result }, { status: 201, headers });
   } catch (error: any) {
     if (error instanceof ValidationError) {
